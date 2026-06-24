@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("DWM.Shared")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+375851bed1943f81cb15c5a1153bcf6089457e35")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+05a4eb2de9e8d52173cb3cfda46ac9f62a0d5f4a")]
 [assembly: System.Reflection.AssemblyProductAttribute("DWM.Shared")]
 [assembly: System.Reflection.AssemblyTitleAttribute("DWM.Shared")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
