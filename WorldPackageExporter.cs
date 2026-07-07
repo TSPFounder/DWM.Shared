@@ -2,46 +2,41 @@
 // Path B export bridge: writes a DWM world package as a plain SQLite .db file
 // that the UE side reads via its built-in SQLite module.
 //
-// The schema defined here is the single source of truth. The UE reader
-// (DwmGameInstance::LoadDwmWorld) must read these exact table and column
-// names. Column casing matches the DwmWorldPackageTypes.h structs: BlockId,
-// Name, BlockType, etc.
-//
-// This first version writes a HARDCODED pendulum world (arm + bob) so the
-// file -> UE load -> spawn chain can be proven before wiring up the real
-// DWM.db read. Replace WriteHardcodedPendulum() with a DWM.db read later.
+// This version reads real simulation results from a CSV produced by the
+// MATLAB Simscape Multibody pendulum (run_pendulum_sim.m), replacing the
+// previous hardcoded small-angle approximation. If the CSV is missing, it
+// falls back to the analytic small-angle curve so the pipeline still runs.
 //
 // Requires NuGet package: Microsoft.Data.Sqlite
 
 using System;
+using System.Globalization;
 using System.IO;
+using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 
 namespace DWM.Shared
 {
-    /// <summary>
-    /// Exports a DWM world to a self-contained SQLite package file that the
-    /// Unreal runtime loads. Schema is plain SQLite — no USQLite asset needed.
-    /// </summary>
     public sealed class WorldPackageExporter
     {
-        // Schema version written into WorldInfo; bump when columns change.
         public const int SchemaVersion = 1;
 
         /// <summary>
-        /// Write a hardcoded single-pendulum world package to the given path.
-        /// Overwrites any existing file at that path.
+        /// Write a single-pendulum world package.
         /// </summary>
-        /// <param name="outputPath">Full path to the .db file to create,
-        /// e.g. C:\DreamWorldMaker\Packages\DWM_WorldPackage_pendulum.db</param>
-        /// <param name="worldId">World id to embed (also used by the launch URL).</param>
-        public void WriteHardcodedPendulum(string outputPath, string worldId = "pendulum")
+        /// <param name="outputPath">Full path to the .db file to create.</param>
+        /// <param name="worldId">World id to embed.</param>
+        /// <param name="simResultsCsv">
+        /// Optional path to a CSV of Simscape results (columns: Time,Position,Velocity).
+        /// If null or missing, falls back to the analytic small-angle curve.
+        /// </param>
+        public void WritePendulum(string outputPath, string worldId = "pendulum",
+                                  string simResultsCsv = null)
         {
             var dir = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            // Fresh file every time — delete then recreate.
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
 
@@ -55,11 +50,13 @@ namespace DWM.Shared
             conn.Open();
 
             CreateSchema(conn);
-            SeedPendulum(conn, worldId);
+            SeedPendulum(conn, worldId, simResultsCsv);
         }
 
-        // ------------------------------------------------------------------
-        // Schema — the authoritative definition both sides agree on.
+        // Kept for backward compatibility with existing callers.
+        public void WriteHardcodedPendulum(string outputPath, string worldId = "pendulum")
+            => WritePendulum(outputPath, worldId, null);
+
         // ------------------------------------------------------------------
         private static void CreateSchema(SqliteConnection conn)
         {
@@ -70,13 +67,11 @@ namespace DWM.Shared
                     Description    TEXT,
                     SchemaVersion  INTEGER
                 );
-
                 CREATE TABLE Blocks (
                     BlockId    TEXT PRIMARY KEY NOT NULL,
                     Name       TEXT,
                     BlockType  TEXT
                 );
-
                 CREATE TABLE Parameters (
                     BlockId  TEXT NOT NULL,
                     Name     TEXT NOT NULL,
@@ -84,7 +79,6 @@ namespace DWM.Shared
                     Unit     TEXT,
                     PRIMARY KEY (BlockId, Name)
                 );
-
                 CREATE TABLE AssetBindings (
                     BlockId    TEXT NOT NULL,
                     AssetPath  TEXT NOT NULL,
@@ -92,7 +86,6 @@ namespace DWM.Shared
                     Role       TEXT,
                     PRIMARY KEY (BlockId, AssetPath, Role)
                 );
-
                 CREATE TABLE SimSamples (
                     BlockId   TEXT NOT NULL,
                     Time      REAL NOT NULL,
@@ -101,80 +94,118 @@ namespace DWM.Shared
                     PRIMARY KEY (BlockId, Time)
                 );
             ";
-
             using var cmd = conn.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
         }
 
         // ------------------------------------------------------------------
-        // Hardcoded pendulum data.
-        // ------------------------------------------------------------------
-        private static void SeedPendulum(SqliteConnection conn, string worldId)
+        private static void SeedPendulum(SqliteConnection conn, string worldId,
+                                         string simResultsCsv)
         {
             using var tx = conn.BeginTransaction();
 
-            // World metadata
             Exec(conn, tx,
-                "INSERT INTO WorldInfo (WorldId, Name, Description, SchemaVersion) VALUES ($id, $name, $desc, $ver);",
-                ("$id", worldId),
-                ("$name", "Tracer Pendulum"),
-                ("$desc", "Single pendulum - the Phase 3 tracer bullet world"),
-                ("$ver", SchemaVersion));
+                "INSERT INTO WorldInfo (WorldId, Name, Description, SchemaVersion) VALUES ($id,$n,$d,$v);",
+                ("$id", worldId), ("$n", "Tracer Pendulum"),
+                ("$d", "Single pendulum driven by Simscape Multibody physics"),
+                ("$v", SchemaVersion));
 
-            // One block: the pendulum (arm + bob treated as a single swinging body)
             const string armBlockId = "block_arm";
             Exec(conn, tx,
-                "INSERT INTO Blocks (BlockId, Name, BlockType) VALUES ($id, $name, $type);",
-                ("$id", armBlockId),
-                ("$name", "PendulumArm"),
-                ("$type", "RigidBody"));
+                "INSERT INTO Blocks (BlockId, Name, BlockType) VALUES ($id,$n,$t);",
+                ("$id", armBlockId), ("$n", "PendulumArm"), ("$t", "RigidBody"));
 
-            // Parameters driving geometry + physics (SI units)
             InsertParam(conn, tx, armBlockId, "armLength",    1.0,    "m");
-            InsertParam(conn, tx, armBlockId, "bobMass",      0.5,    "kg");
-            InsertParam(conn, tx, armBlockId, "initialAngle", 0.5236, "rad");  // 30 degrees
+            InsertParam(conn, tx, armBlockId, "bobMass",      3.14,   "kg");   // from CAD
+            InsertParam(conn, tx, armBlockId, "initialAngle", 0.5236, "rad");
             InsertParam(conn, tx, armBlockId, "gravity",      9.81,   "m/s2");
 
-            // Asset binding — a real mesh stands in for the arm.
-            // Using an engine basic shape so this works before importing registry assets.
             Exec(conn, tx,
-                "INSERT INTO AssetBindings (BlockId, AssetPath, AssetType, Role) VALUES ($id, $path, $atype, $role);",
+                "INSERT INTO AssetBindings (BlockId, AssetPath, AssetType, Role) VALUES ($id,$p,$at,$r);",
                 ("$id", armBlockId),
-                ("$path", "/Engine/BasicShapes/Cylinder.Cylinder"),
-                ("$atype", "StaticMesh"),
-                ("$role", "Visual"));
+                ("$p", "/Engine/BasicShapes/Cylinder.Cylinder"),
+                ("$at", "StaticMesh"), ("$r", "Visual"));
 
-            // A few precomputed sim samples so UE has motion to play before
-            // the real Simscape results are wired in. Small-angle approximation:
-            // theta(t) = A * cos(omega * t), omega = sqrt(g / L).
-            // A = 0.5236 rad, omega = sqrt(9.81/1.0) ~= 3.132 rad/s.
-            double amplitude = 0.5236;
-            double omega = Math.Sqrt(9.81 / 1.0);
-            for (int i = 0; i <= 60; i++)          // ~2 seconds at 30 fps
+            // --- Sim samples: from CSV if available, else analytic fallback ---
+            var samples = LoadSamplesFromCsv(simResultsCsv);
+            string source;
+            if (samples != null && samples.Count > 0)
             {
-                double t = i / 30.0;
-                double theta = amplitude * Math.Cos(omega * t);
-                double thetaDot = -amplitude * omega * Math.Sin(omega * t);
+                source = "Simscape CSV";
+            }
+            else
+            {
+                samples = GenerateSmallAngleFallback();
+                source = "analytic small-angle fallback";
+            }
+
+            foreach (var s in samples)
+            {
                 Exec(conn, tx,
-                    "INSERT INTO SimSamples (BlockId, Time, Position, Velocity) VALUES ($id, $t, $p, $v);",
-                    ("$id", armBlockId),
-                    ("$t", t),
-                    ("$p", theta),
-                    ("$v", thetaDot));
+                    "INSERT INTO SimSamples (BlockId, Time, Position, Velocity) VALUES ($id,$t,$p,$v);",
+                    ("$id", armBlockId), ("$t", s.Time), ("$p", s.Position), ("$v", s.Velocity));
             }
 
             tx.Commit();
+            Console.WriteLine($"[DWM] Wrote {samples.Count} sim samples ({source}).");
         }
 
         // ------------------------------------------------------------------
-        // Helpers
+        private readonly struct Sample
+        {
+            public readonly double Time, Position, Velocity;
+            public Sample(double t, double p, double v) { Time = t; Position = p; Velocity = v; }
+        }
+
+        private static List<Sample> LoadSamplesFromCsv(string csvPath)
+        {
+            if (string.IsNullOrEmpty(csvPath) || !File.Exists(csvPath))
+                return null;
+
+            var result = new List<Sample>();
+            var lines = File.ReadAllLines(csvPath);
+
+            // Expect header: Time,Position,Velocity
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i].Trim();
+                if (line.Length == 0) continue;
+
+                // Skip header row (non-numeric first field)
+                var parts = line.Split(',');
+                if (parts.Length < 3) continue;
+                if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double t))
+                    continue; // header or bad row
+
+                double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double p);
+                double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double v);
+                result.Add(new Sample(t, p, v));
+            }
+            return result;
+        }
+
+        private static List<Sample> GenerateSmallAngleFallback()
+        {
+            // theta(t) = A cos(omega t), omega = sqrt(g/L)
+            var list = new List<Sample>();
+            double A = 0.5236, omega = Math.Sqrt(9.81 / 1.0);
+            for (int i = 0; i <= 60; i++)
+            {
+                double t = i / 30.0;
+                double theta = A * Math.Cos(omega * t);
+                double thetaDot = -A * omega * Math.Sin(omega * t);
+                list.Add(new Sample(t, theta, thetaDot));
+            }
+            return list;
+        }
+
         // ------------------------------------------------------------------
         private static void InsertParam(SqliteConnection conn, SqliteTransaction tx,
             string blockId, string name, double value, string unit)
         {
             Exec(conn, tx,
-                "INSERT INTO Parameters (BlockId, Name, Value, Unit) VALUES ($b, $n, $v, $u);",
+                "INSERT INTO Parameters (BlockId, Name, Value, Unit) VALUES ($b,$n,$v,$u);",
                 ("$b", blockId), ("$n", name), ("$v", value), ("$u", unit));
         }
 

@@ -7,6 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Dotnet8\**" />
+    <Compile Remove="bin\**" />
+    <Compile Remove="obj\**" />
+    <EmbeddedResource Remove="Dotnet8\**" />
+    <None Remove="Dotnet8\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
   </ItemGroup>
 
