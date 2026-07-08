@@ -22,7 +22,7 @@ namespace DWM.Shared.Economy
                 ResourceId       TEXT REFERENCES Resources(ResourceId),
                 Quantity         REAL,
                 Memo             TEXT,
-                Status           TEXT NOT NULL CHECK (Status IN ('Proposed', 'Settled', 'Cancelled')) DEFAULT 'Proposed',
+                Status           TEXT NOT NULL CHECK (Status IN ('Proposed', 'Settling', 'Settled', 'Cancelled')) DEFAULT 'Proposed',
                 CreatedAt        TEXT NOT NULL,
                 ResolvedAt       TEXT
             );

@@ -132,12 +132,14 @@ namespace DWM.Shared.Economy
         /// <summary>
         /// Re-validates a Proposed request against CURRENT community/resource state — not
         /// just trusting what was true at propose time, since that state can drift — and, if
-        /// still valid, commits it as a single StoneLedger row via
-        /// EconomyRepository.AppendLedgerEntry, then marks the request Settled. If validation
-        /// now fails, the request is left completely untouched (still Proposed, no
-        /// StoneLedger row written). Fails cleanly (no exception, no double-commit, no
-        /// resurrecting a cancelled trade) if the request doesn't exist or isn't currently
-        /// Proposed.
+        /// still valid, atomically claims it (see TryClaimForSettlement) before committing it
+        /// as a single StoneLedger row via EconomyRepository.AppendLedgerEntry, then marking
+        /// the request Settled. If validation now fails, the request is left completely
+        /// untouched (still Proposed, no StoneLedger row written, no claim attempted). Fails
+        /// cleanly (no exception, no double-commit, no resurrecting a cancelled trade) if the
+        /// request doesn't exist, isn't currently Proposed, or loses the compare-and-swap
+        /// claim to a concurrent caller (or a stuck prior attempt — see Settling in
+        /// TradeRequestStatus).
         /// </summary>
         public TradeRequestResult SettleProposedTrade(string requestId)
         {
@@ -146,6 +148,9 @@ namespace DWM.Shared.Economy
                 return TradeRequestResult.Rejected(TradeRequestFailureReason.RequestNotFound,
                     $"No trade request with id '{requestId}' exists.");
 
+            // Fast-path rejection on a (possibly stale) read — avoids a wasted structural
+            // validation query in the common case. This is NOT what prevents the race the
+            // compare-and-swap below guards against; it's purely an optimization.
             if (existing.Status != TradeRequestStatus.Proposed)
                 return TradeRequestResult.Rejected(TradeRequestFailureReason.RequestNotProposed,
                     $"Trade request '{requestId}' is already {existing.Status}, not Proposed — it cannot be settled again.");
@@ -155,15 +160,26 @@ namespace DWM.Shared.Economy
             if (failure is not null)
                 return TradeRequestResult.Rejected(failure.Value.Reason, failure.Value.Message);
 
-            // Ledger write first, status update second: if the process died between these two
-            // steps, the worst case is a settled trade whose request row is still marked
-            // Proposed — recoverable (an operator can see the StoneLedger row and reconcile,
-            // or the request is safely re-settleable-looking but AppendLedgerEntry itself was
-            // already durably committed so at worst a human notices two ledger rows for one
-            // request on manual review). The reverse order (marking Settled first) risks a
-            // request marked Settled with NO matching StoneLedger row if the process died in
-            // between — a false settlement, which is the worse failure mode given StoneLedger
-            // is this system's actual source of truth for what moved.
+            // Compare-and-swap: atomically claim this request for settlement by flipping it
+            // to the transient Settling status ONLY IF it is still Proposed right now. This
+            // is the actual race guard, not the status check above. It closes the gap where a
+            // crash between the ledger write and the Settled update would otherwise leave the
+            // request looking Proposed, letting a naive retry pass the check above and
+            // double-append to StoneLedger. If this doesn't affect exactly one row, something
+            // else already claimed (or resolved) this request since the read above — reject
+            // cleanly rather than proceeding to the ledger write.
+            if (!TryClaimForSettlement(requestId))
+            {
+                var current = GetTradeRequest(requestId);
+                return TradeRequestResult.Rejected(TradeRequestFailureReason.RequestNotProposed,
+                    $"Trade request '{requestId}' could not be claimed for settlement — it is currently " +
+                    $"{(current?.Status.ToString() ?? "unknown")}, not Proposed. Another operation may " +
+                    "already be settling it, or it was already resolved.");
+            }
+
+            // Ledger write first, Settled update second: if the process dies here, the
+            // request is stuck at Settling (not Proposed), so a retry is correctly rejected
+            // by the compare-and-swap above instead of silently re-appending to StoneLedger.
             var ledgerEntry = _economyRepository.AppendLedgerEntry(
                 existing.FromCommunityId, existing.ToCommunityId, existing.Amount,
                 existing.ResourceId, existing.Quantity, existing.Memo);
@@ -173,6 +189,35 @@ namespace DWM.Shared.Economy
 
             var updated = existing with { Status = TradeRequestStatus.Settled, ResolvedAt = resolvedAt };
             return TradeRequestResult.Succeeded(updated, ledgerEntry);
+        }
+
+        /// <summary>
+        /// Atomically flips a request from Proposed to the transient Settling status via
+        /// UPDATE ... WHERE Status = 'Proposed', and reports whether this call won that
+        /// claim. SQLite serializes concurrent writers to the same database file, so this
+        /// UPDATE is a safe compare-and-swap even across separate connections/processes:
+        /// exactly one concurrent caller can ever see rowsAffected == 1 for a given
+        /// RequestId.
+        /// </summary>
+        private bool TryClaimForSettlement(string requestId)
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+            int rowsAffected;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    UPDATE TradeRequests
+                    SET Status = $settling
+                    WHERE RequestId = $id AND Status = $proposed;";
+                cmd.Parameters.AddWithValue("$settling", nameof(TradeRequestStatus.Settling));
+                cmd.Parameters.AddWithValue("$id", requestId);
+                cmd.Parameters.AddWithValue("$proposed", nameof(TradeRequestStatus.Proposed));
+                rowsAffected = cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+            return rowsAffected == 1;
         }
 
         /// <summary>
@@ -270,6 +315,7 @@ namespace DWM.Shared.Economy
         private static TradeRequestStatus ParseStatus(string status) => status switch
         {
             "Proposed" => TradeRequestStatus.Proposed,
+            "Settling" => TradeRequestStatus.Settling,
             "Settled" => TradeRequestStatus.Settled,
             "Cancelled" => TradeRequestStatus.Cancelled,
             _ => throw new InvalidOperationException($"Unknown TradeRequests.Status value: '{status}'.")
