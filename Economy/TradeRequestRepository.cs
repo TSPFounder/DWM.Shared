@@ -221,10 +221,42 @@ namespace DWM.Shared.Economy
         }
 
         /// <summary>
+        /// Atomically flips a request from Proposed directly to Cancelled (with ResolvedAt
+        /// set) via UPDATE ... WHERE Status = 'Proposed', and reports whether this call won
+        /// that claim. Same compare-and-swap principle as TryClaimForSettlement, but claim
+        /// and finalize are one step here since cancellation has no risky follow-up write.
+        /// </summary>
+        private bool TryClaimForCancellation(string requestId, DateTimeOffset resolvedAt)
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+            int rowsAffected;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    UPDATE TradeRequests
+                    SET Status = $cancelled, ResolvedAt = $resolvedAt
+                    WHERE RequestId = $id AND Status = $proposed;";
+                cmd.Parameters.AddWithValue("$cancelled", nameof(TradeRequestStatus.Cancelled));
+                cmd.Parameters.AddWithValue("$resolvedAt", resolvedAt.ToString("o"));
+                cmd.Parameters.AddWithValue("$id", requestId);
+                cmd.Parameters.AddWithValue("$proposed", nameof(TradeRequestStatus.Proposed));
+                rowsAffected = cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+            return rowsAffected == 1;
+        }
+
+        /// <summary>
         /// Marks a Proposed request Cancelled. Never touches StoneLedger. Fails cleanly if
-        /// the request doesn't exist or isn't currently Proposed (mirrors
-        /// SettleProposedTrade's not-found/wrong-status handling, so an already-settled or
-        /// already-cancelled request can't be cancelled out from under a settlement either).
+        /// the request doesn't exist, isn't currently Proposed, or loses the compare-and-swap
+        /// claim below to a concurrent caller — including a concurrent SettleProposedTrade
+        /// call that wins first. Before this compare-and-swap existed, this method had the
+        /// same unguarded read-then-write gap SettleProposedTrade did: a concurrent settle
+        /// that completed between this method's initial read and its write could have its
+        /// Settled status silently overwritten back to Cancelled here, even though a real
+        /// StoneLedger row had already been committed for it.
         /// </summary>
         public TradeRequestResult CancelProposedTrade(string requestId)
         {
@@ -233,12 +265,31 @@ namespace DWM.Shared.Economy
                 return TradeRequestResult.Rejected(TradeRequestFailureReason.RequestNotFound,
                     $"No trade request with id '{requestId}' exists.");
 
+            // Fast-path rejection on a (possibly stale) read — avoids a wasted write attempt
+            // in the common case. This is NOT what prevents the race the compare-and-swap
+            // below guards against; it's purely an optimization, same as SettleProposedTrade.
             if (existing.Status != TradeRequestStatus.Proposed)
                 return TradeRequestResult.Rejected(TradeRequestFailureReason.RequestNotProposed,
                     $"Trade request '{requestId}' is already {existing.Status}, not Proposed — it cannot be cancelled.");
 
             var resolvedAt = DateTimeOffset.UtcNow;
-            UpdateStatus(requestId, TradeRequestStatus.Cancelled, resolvedAt);
+
+            // Compare-and-swap: atomically claim-and-finalize in one UPDATE, ONLY IF the
+            // request is still Proposed right now. Unlike SettleProposedTrade, cancellation
+            // is a single write with nothing risky happening after it, so there's no need for
+            // a transient intermediate status here — the claim and the final Cancelled state
+            // are the same UPDATE. If this doesn't affect exactly one row, something else
+            // (most importantly, a concurrent SettleProposedTrade that already claimed or
+            // settled this request) got there first — reject cleanly rather than overwriting
+            // whatever it did.
+            if (!TryClaimForCancellation(requestId, resolvedAt))
+            {
+                var current = GetTradeRequest(requestId);
+                return TradeRequestResult.Rejected(TradeRequestFailureReason.RequestNotProposed,
+                    $"Trade request '{requestId}' could not be cancelled — it is currently " +
+                    $"{(current?.Status.ToString() ?? "unknown")}, not Proposed. Another operation may " +
+                    "already be settling or cancelling it.");
+            }
 
             var updated = existing with { Status = TradeRequestStatus.Cancelled, ResolvedAt = resolvedAt };
             return TradeRequestResult.Succeeded(updated);
