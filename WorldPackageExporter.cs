@@ -14,12 +14,14 @@ using System.Globalization;
 using System.IO;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
+using DWM.Shared.Economy;
 
 namespace DWM.Shared
 {
     public sealed class WorldPackageExporter
     {
         public const int SchemaVersion = 1;
+        public const int EconomySchemaVersion = 1;
 
         /// <summary>
         /// Write a single-pendulum world package.
@@ -56,6 +58,186 @@ namespace DWM.Shared
         // Kept for backward compatibility with existing callers.
         public void WriteHardcodedPendulum(string outputPath, string worldId = "pendulum")
             => WritePendulum(outputPath, worldId, null);
+
+        /// <summary>
+        /// Day 12: exports a SNAPSHOT of the CURRENT economy state (Communities, Resources,
+        /// CommunityResources, all StoneLedger entries, plus a derived per-community Dollar
+        /// Vault balance/threshold and CommunityFailureStateService failure status) into its
+        /// own world-package .db -- a sibling to WritePendulum, not an extension of it.
+        ///
+        /// WHY A SIBLING METHOD, NOT A MERGE INTO WritePendulum'S FILE: SCOPE.md's 2026-07-02
+        /// entry already establishes economy.db and pendulum.db as deliberately separate files
+        /// ("different consumers, different change rates"). WritePendulum deletes-and-recreates
+        /// its ENTIRE output file on every call; if this snapshot wrote into that same file it
+        /// would either wipe the pendulum data or have to special-case around it. Writing to
+        /// its own output path preserves that same separation one level up, for the exported
+        /// package as much as for the live authoring databases -- and lets each export run
+        /// independently (re-exporting the economy snapshot doesn't require re-running the
+        /// pendulum export, and vice versa).
+        ///
+        /// <paramref name="economyDbPath"/> is opened READ-ONLY via the existing Day 5-11
+        /// repositories/services (EconomyRepository, DollarVaultRepository via
+        /// CommunityFailureStateService) -- this method never writes to economy.db itself.
+        /// </summary>
+        /// <param name="outputPath">Full path to the snapshot .db file to create (a separate
+        /// file from whatever WritePendulum writes to -- do not point both at the same path).</param>
+        /// <param name="economyDbPath">Path to the live, already-seeded economy.db to read from.</param>
+        /// <param name="worldId">World id to embed in the snapshot's WorldInfo row.</param>
+        public void WriteEconomySnapshot(string outputPath, string economyDbPath, string worldId = "economy")
+        {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = outputPath,
+                Mode = SqliteOpenMode.ReadWriteCreate
+            }.ToString();
+
+            using (var conn = new SqliteConnection(connectionString))
+            {
+                conn.Open();
+                CreateEconomySchema(conn);
+                SeedEconomySnapshot(conn, worldId, economyDbPath);
+            } // conn disposed here -- releases the write handle before this method returns
+              // (Task 4b: DWMStudio must not hold the .db handle after export completes).
+        }
+
+        // ------------------------------------------------------------------
+        private static void CreateEconomySchema(SqliteConnection conn)
+        {
+            const string sql = @"
+                CREATE TABLE WorldInfo (
+                    WorldId        TEXT PRIMARY KEY NOT NULL,
+                    Name           TEXT,
+                    Description    TEXT,
+                    SchemaVersion  INTEGER,
+                    ExportedAtUtc  TEXT
+                );
+                CREATE TABLE Communities (
+                    CommunityId  TEXT PRIMARY KEY NOT NULL,
+                    Name         TEXT,
+                    BiomeType    TEXT,
+                    Description  TEXT
+                );
+                CREATE TABLE Resources (
+                    ResourceId  TEXT PRIMARY KEY NOT NULL,
+                    Name        TEXT,
+                    Unit        TEXT,
+                    Category    TEXT
+                );
+                CREATE TABLE CommunityResources (
+                    CommunityId  TEXT NOT NULL,
+                    ResourceId   TEXT NOT NULL,
+                    Role         TEXT NOT NULL,
+                    Quantity     REAL NOT NULL,
+                    PRIMARY KEY (CommunityId, ResourceId, Role)
+                );
+                CREATE TABLE StoneLedger (
+                    TransactionId    TEXT PRIMARY KEY NOT NULL,
+                    Timestamp        TEXT NOT NULL,
+                    FromCommunityId  TEXT NOT NULL,
+                    ToCommunityId    TEXT NOT NULL,
+                    Amount           REAL NOT NULL,
+                    ResourceId       TEXT,
+                    Quantity         REAL,
+                    Memo             TEXT
+                );
+                CREATE TABLE CommunityDollarVault (
+                    CommunityId  TEXT PRIMARY KEY NOT NULL,
+                    Balance      REAL NOT NULL,
+                    Threshold    REAL NOT NULL
+                );
+                CREATE TABLE CommunityFailureStatus (
+                    CommunityId  TEXT PRIMARY KEY NOT NULL,
+                    State        TEXT NOT NULL
+                );
+            ";
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+
+        // ------------------------------------------------------------------
+        private static void SeedEconomySnapshot(SqliteConnection conn, string worldId, string economyDbPath)
+        {
+            var economy = new EconomyRepository(economyDbPath);
+            var failureState = new CommunityFailureStateService(economyDbPath);
+
+            var communities = economy.GetCommunities();
+            var resources = economy.GetResources();
+            var ledgerEntries = economy.GetLedgerEntries();
+
+            using var tx = conn.BeginTransaction();
+
+            Exec(conn, tx,
+                "INSERT INTO WorldInfo (WorldId, Name, Description, SchemaVersion, ExportedAtUtc) VALUES ($id,$n,$d,$v,$ts);",
+                ("$id", worldId), ("$n", "DWM Economy Snapshot"),
+                ("$d", "Current-state export of the Stone ledger economy for UE to read"),
+                ("$v", EconomySchemaVersion), ("$ts", DateTimeOffset.UtcNow.ToString("o")));
+
+            foreach (var c in communities)
+            {
+                Exec(conn, tx,
+                    "INSERT INTO Communities (CommunityId, Name, BiomeType, Description) VALUES ($id,$n,$b,$d);",
+                    ("$id", c.CommunityId), ("$n", c.Name), ("$b", c.BiomeType),
+                    ("$d", (object?)c.Description ?? DBNull.Value));
+            }
+
+            foreach (var r in resources)
+            {
+                Exec(conn, tx,
+                    "INSERT INTO Resources (ResourceId, Name, Unit, Category) VALUES ($id,$n,$u,$c);",
+                    ("$id", r.ResourceId), ("$n", r.Name), ("$u", r.Unit),
+                    ("$c", (object?)r.Category ?? DBNull.Value));
+            }
+
+            foreach (var c in communities)
+            {
+                foreach (var cr in economy.GetCommunityResources(c.CommunityId))
+                {
+                    Exec(conn, tx,
+                        "INSERT INTO CommunityResources (CommunityId, ResourceId, Role, Quantity) VALUES ($cid,$rid,$role,$qty);",
+                        ("$cid", cr.CommunityId), ("$rid", cr.ResourceId), ("$role", cr.Role.ToString()),
+                        ("$qty", cr.Quantity));
+                }
+            }
+
+            foreach (var entry in ledgerEntries)
+            {
+                Exec(conn, tx,
+                    @"INSERT INTO StoneLedger
+                        (TransactionId, Timestamp, FromCommunityId, ToCommunityId, Amount, ResourceId, Quantity, Memo)
+                      VALUES ($id,$ts,$from,$to,$amount,$resource,$qty,$memo);",
+                    ("$id", entry.TransactionId), ("$ts", entry.Timestamp.ToString("o")),
+                    ("$from", entry.FromCommunityId), ("$to", entry.ToCommunityId), ("$amount", entry.Amount),
+                    ("$resource", (object?)entry.ResourceId ?? DBNull.Value),
+                    ("$qty", (object?)entry.Quantity ?? DBNull.Value),
+                    ("$memo", (object?)entry.Memo ?? DBNull.Value));
+            }
+
+            foreach (var c in communities)
+            {
+                var status = failureState.GetFailureState(c.CommunityId);
+
+                Exec(conn, tx,
+                    "INSERT INTO CommunityDollarVault (CommunityId, Balance, Threshold) VALUES ($id,$bal,$thr);",
+                    ("$id", c.CommunityId), ("$bal", status.VaultBalance), ("$thr", status.VaultThreshold));
+
+                Exec(conn, tx,
+                    "INSERT INTO CommunityFailureStatus (CommunityId, State) VALUES ($id,$state);",
+                    ("$id", c.CommunityId), ("$state", status.State.ToString()));
+            }
+
+            tx.Commit();
+            Console.WriteLine(
+                $"[DWM] Wrote economy snapshot: {communities.Count} communities, {resources.Count} resources, " +
+                $"{ledgerEntries.Count} StoneLedger entries, {communities.Count} vault/failure-status rows.");
+        }
 
         // ------------------------------------------------------------------
         private static void CreateSchema(SqliteConnection conn)
