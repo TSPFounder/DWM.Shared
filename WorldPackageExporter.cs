@@ -83,6 +83,33 @@ namespace DWM.Shared
         /// file from whatever WritePendulum writes to -- do not point both at the same path).</param>
         /// <param name="economyDbPath">Path to the live, already-seeded economy.db to read from.</param>
         /// <param name="worldId">World id to embed in the snapshot's WorldInfo row.</param>
+        /// <summary>
+        /// Day 13: same as <see cref="WriteEconomySnapshot(string, string, string)"/>, but
+        /// with no economyDbPath supplied -- exports the CANONICAL GOLDEN DEMO SCENARIO
+        /// (GoldenEconomyScenario.Seed) instead of an existing hand-prepared database.
+        ///
+        /// Mirrors WritePendulum's simResultsCsv=null fallback pattern: when the caller
+        /// doesn't have (or doesn't want to point at) a specific source database, this
+        /// generates the canonical data deterministically from code -- GenerateSmallAngleFallback()
+        /// for the pendulum, GoldenEconomyScenario.Seed() here -- rather than requiring an
+        /// external prepared file. This is the "produce a demo world package" default path
+        /// Task 2 asked for.
+        /// </summary>
+        public void WriteGoldenEconomySnapshot(string outputPath, string worldId = "economy")
+        {
+            var tempEconomyDbPath = Path.Combine(Path.GetTempPath(), $"dwm_golden_economy_{Guid.NewGuid():N}.db");
+            try
+            {
+                GoldenEconomyScenario.Seed(tempEconomyDbPath);
+                WriteEconomySnapshot(outputPath, tempEconomyDbPath, worldId);
+            }
+            finally
+            {
+                if (File.Exists(tempEconomyDbPath))
+                    File.Delete(tempEconomyDbPath);
+            }
+        }
+
         public void WriteEconomySnapshot(string outputPath, string economyDbPath, string worldId = "economy")
         {
             var dir = Path.GetDirectoryName(outputPath);
