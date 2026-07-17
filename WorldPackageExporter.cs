@@ -105,6 +105,12 @@ namespace DWM.Shared
             }
             finally
             {
+                // EconomyRepository and CommunityFailureStateService open short-lived
+                // connections while copying the seeded scenario.  Microsoft.Data.Sqlite
+                // returns those handles to its pool when disposed, which can still keep
+                // the temporary database locked on Windows.  Release the pool before
+                // deleting this per-export temporary file.
+                SqliteConnection.ClearAllPools();
                 if (File.Exists(tempEconomyDbPath))
                     File.Delete(tempEconomyDbPath);
             }
