@@ -132,6 +132,13 @@ namespace DWM.Shared.Economy
             InsertResource(conn, tx, "textiles", "Textiles", "unit", "manufactured");
             InsertResource(conn, tx, "manufactured_tools", "Manufactured Tools", "unit", "manufactured");
             InsertResource(conn, tx, "software_services", "Software / Maintenance Services", "hour", "labor");
+            // Added 2026-08-01. Hillside's MVP trade moves from Timber to engineering
+            // services (CAD drawings + Simulink model) -- see SCOPE.md 2026-07-18.
+            // This row is NOT optional. StoneLedger.ResourceId is a foreign key into
+            // Resources and PRAGMA foreign_keys is ON, so a trade naming a resource that
+            // is absent here fails the INSERT outright. Timber stays seeded: it is
+            // deferred to post-MVP, not removed.
+            InsertResource(conn, tx, "engineering_services", "Engineering Services", "hour", "labor");
 
             // Mountain: Produces Timber, Wind-Power | Needs Grain, Manufactured Tools, Skilled Labor, Software Services
             InsertCommunityResource(conn, tx, "mountain", "timber", "Produces", 100);
@@ -140,10 +147,15 @@ namespace DWM.Shared.Economy
             InsertCommunityResource(conn, tx, "mountain", "manufactured_tools", "Needs", 20);
             InsertCommunityResource(conn, tx, "mountain", "skilled_labor", "Needs", 10);
             InsertCommunityResource(conn, tx, "mountain", "software_services", "Needs", 10);
+            // Added 2026-08-01. Mountain is the buyer for Hillside's engineering services
+            // in the MVP storyline (Act 2, Stop 1).
+            InsertCommunityResource(conn, tx, "mountain", "engineering_services", "Needs", 10);
 
-            // Hillside: Produces Orchard Fruit, Wool | Needs Timber, Wind-Power, Textiles
+            // Hillside: Produces Orchard Fruit, Wool, Engineering Services | Needs Timber, Wind-Power, Textiles
             InsertCommunityResource(conn, tx, "hillside", "orchard_fruit", "Produces", 100);
             InsertCommunityResource(conn, tx, "hillside", "wool", "Produces", 100);
+            // Added 2026-08-01 alongside the engineering_services resource.
+            InsertCommunityResource(conn, tx, "hillside", "engineering_services", "Produces", 100);
             InsertCommunityResource(conn, tx, "hillside", "timber", "Needs", 20);
             InsertCommunityResource(conn, tx, "hillside", "wind_power", "Needs", 20);
             InsertCommunityResource(conn, tx, "hillside", "textiles", "Needs", 20);
