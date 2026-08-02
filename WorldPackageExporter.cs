@@ -510,14 +510,93 @@ namespace DWM.Shared
                     ("$id", rotorBlockId), ("$t", s.Time), ("$p", s.Position), ("$v", s.Velocity));
             }
 
+            // ----------------------------------------------------------------
+            // ADDITIONAL CHANNELS: the turbine has four moving parts, not one.
+            //
+            // SimSamples is keyed on (BlockId, Time), so a mechanism with several
+            // moving parts is expressed as several BLOCKS rather than as extra
+            // columns. The pendulum tracer used a single block because a pendulum has
+            // a single moving part; this is the same schema being used as designed,
+            // and it needs NO migration.
+            //
+            // Discovery is by convention: wtExportSimSamples.m writes sibling files
+            // named <base>_rotor.csv, <base>_pitch.csv and so on, so given the rotor
+            // path the rest are found by substitution. A caller who passes a path
+            // without "_rotor" gets rotor-only behaviour, which is what every
+            // existing caller and test does.
+            var extraTotal = SeedTurbineChannel(conn, tx, simResultsCsv, "pitch",
+                "block_pitch", "BladePitch",  "RigidBody", "REPLACE_ME/WindTurbineBlade");
+            extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "yaw",
+                "block_yaw",   "Nacelle",     "RigidBody", "REPLACE_ME/WindTurbineNacelle");
+            extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "tower",
+                "block_tower", "Tower",       "RigidBody", "REPLACE_ME/WindTurbineTower");
+
+            // NOT KINEMATIC, and deliberately so. BlockType 'Signal' marks a block
+            // whose Position and Velocity are two plain channel slots rather than an
+            // angle and a rate -- here electrical power (W) and wind speed (m/s),
+            // which belong on a HUD rather than on a mesh. Written down here so the
+            // reuse is documented rather than guessed at, and given no AssetBinding
+            // because there is nothing to bind it to.
+            extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "power",
+                "block_power", "PowerOutput", "Signal", null);
+
             tx.Commit();
 
             var lastAzimuth = samples[samples.Count - 1].Position;
             Console.WriteLine(
-                $"[DWM] Wrote {samples.Count} turbine sim samples ({source}). " +
+                $"[DWM] Wrote {samples.Count} turbine rotor samples ({source}). " +
                 $"Azimuth spans {lastAzimuth:F2} rad " +
                 $"({lastAzimuth / (2 * Math.PI):F1} revolutions, UNWRAPPED -- " +
                 "the UE actor takes the modulus at read time).");
+            if (extraTotal > 0)
+                Console.WriteLine($"[DWM] Plus {extraTotal} samples across the pitch/yaw/tower/power channels.");
+        }
+
+        /// <summary>
+        /// Seed one additional turbine channel from a sibling CSV, if that file exists.
+        /// Returns the number of samples written (0 when the file is absent).
+        /// </summary>
+        /// <remarks>
+        /// YAW IS AN ERROR ANGLE, NOT AN ABSOLUTE HEADING. The model logs the angle
+        /// between where the nacelle points and where the wind comes from, so driving
+        /// a nacelle's world rotation straight from it will look wrong. Absolute
+        /// heading needs wind direction, which the model does not currently log --
+        /// adding it means a 13th channel on the LogMux in wtBuildModel. Until then
+        /// the yaw block is diagnostic rather than animation input.
+        /// </remarks>
+        private static int SeedTurbineChannel(SqliteConnection conn, SqliteTransaction tx,
+            string rotorCsvPath, string suffix, string blockId, string name,
+            string blockType, string assetPath)
+        {
+            if (string.IsNullOrEmpty(rotorCsvPath)) return 0;
+
+            // Only substitute on the final "_rotor" so a directory called e.g.
+            // "rotor_studies" upstream in the path cannot be rewritten by accident.
+            int at = rotorCsvPath.LastIndexOf("_rotor", StringComparison.Ordinal);
+            if (at < 0) return 0;
+            var path = rotorCsvPath.Substring(0, at) + "_" + suffix + rotorCsvPath.Substring(at + "_rotor".Length);
+
+            var samples = LoadSamplesFromCsv(path);
+            if (samples == null || samples.Count == 0) return 0;
+
+            Exec(conn, tx,
+                "INSERT INTO Blocks (BlockId, Name, BlockType) VALUES ($id,$n,$t);",
+                ("$id", blockId), ("$n", name), ("$t", blockType));
+
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                Exec(conn, tx,
+                    "INSERT INTO AssetBindings (BlockId, AssetPath, AssetType, Role) VALUES ($id,$p,$at,$r);",
+                    ("$id", blockId), ("$p", assetPath), ("$at", "StaticMesh"), ("$r", "Visual"));
+            }
+
+            foreach (var s in samples)
+            {
+                Exec(conn, tx,
+                    "INSERT INTO SimSamples (BlockId, Time, Position, Velocity) VALUES ($id,$t,$p,$v);",
+                    ("$id", blockId), ("$t", s.Time), ("$p", s.Position), ("$v", s.Velocity));
+            }
+            return samples.Count;
         }
 
         /// <summary>
