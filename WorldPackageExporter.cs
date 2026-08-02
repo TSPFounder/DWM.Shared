@@ -60,6 +60,65 @@ namespace DWM.Shared
             => WritePendulum(outputPath, worldId, null);
 
         /// <summary>
+        /// Write a wind-turbine world package: the Mountain turbine's rotor motion, sourced
+        /// from the R2011a Simulink model (see SCOPE.md 2026-08-02).
+        /// </summary>
+        /// <param name="outputPath">Full path to the .db file to create.</param>
+        /// <param name="worldId">World id to embed.</param>
+        /// <param name="simResultsCsv">
+        /// Path to the CSV written by wtExportSimSamples.m. Columns are Time,Position,Velocity
+        /// -- the same three the pendulum uses, which is why this reuses LoadSamplesFromCsv
+        /// unchanged. For the turbine they carry time (s), ROTOR AZIMUTH (rad, UNWRAPPED), and
+        /// rotor angular velocity (rad/s).
+        /// </param>
+        /// <param name="allowFallback">
+        /// Opt in to the constant-rate placeholder when the CSV is missing. Defaults to FALSE,
+        /// which is a deliberate difference from WritePendulum -- see the note below.
+        /// </param>
+        /// <remarks>
+        /// WHY THIS THROWS WHERE WritePendulum SILENTLY FALLS BACK
+        ///
+        /// WritePendulum degrades to GenerateSmallAngleFallback() without complaint. That was
+        /// right for a tracer bullet whose job was to prove the pipeline moved bytes end to end.
+        /// It is the wrong default here, for a reason specific to what a turbine looks like.
+        ///
+        /// A pendulum on the analytic curve still visibly swings, and anyone who knows the
+        /// project can tell roughly what they are looking at. A turbine on a constant-rate curve
+        /// looks EXACTLY like a turbine on real model output -- a rotor going round at a steady
+        /// speed is a rotor going round at a steady speed. The failure is invisible at precisely
+        /// the place someone would check for it.
+        ///
+        /// That matters because the MVP's engineering-rigor claim now rests on this data being
+        /// model output. SCOPE.md 2026-08-02 is explicit that demo materials may say "real
+        /// engineering model" and may not say "Simscape" or "CAD-verified physics". Shipping the
+        /// placeholder by accident and describing it as model output would make that claim false
+        /// with nothing on screen to give it away. So the fallback exists, but it cannot be
+        /// reached without asking for it by name.
+        /// </remarks>
+        public void WriteTurbine(string outputPath, string worldId = "turbine",
+                                 string simResultsCsv = null, bool allowFallback = false)
+        {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = outputPath,
+                Mode = SqliteOpenMode.ReadWriteCreate
+            }.ToString();
+
+            using var conn = new SqliteConnection(connectionString);
+            conn.Open();
+
+            CreateSchema(conn);
+            SeedTurbine(conn, worldId, simResultsCsv, allowFallback);
+        }
+
+        /// <summary>
         /// Day 12: exports a SNAPSHOT of the CURRENT economy state (Communities, Resources,
         /// CommunityResources, all StoneLedger entries, plus a derived per-community Dollar
         /// Vault balance/threshold and CommunityFailureStateService failure status) into its
@@ -364,6 +423,120 @@ namespace DWM.Shared
 
             tx.Commit();
             Console.WriteLine($"[DWM] Wrote {samples.Count} sim samples ({source}).");
+        }
+
+        // ------------------------------------------------------------------
+        private static void SeedTurbine(SqliteConnection conn, string worldId,
+                                        string simResultsCsv, bool allowFallback)
+        {
+            // Load BEFORE opening the transaction: if the CSV is missing and fallback was not
+            // requested, fail without having created a half-populated database on disk.
+            var samples = LoadSamplesFromCsv(simResultsCsv);
+            string source;
+
+            if (samples != null && samples.Count > 0)
+            {
+                source = "R2011a Simulink model (wtExportSimSamples.m)";
+            }
+            else if (allowFallback)
+            {
+                samples = GenerateConstantRotationFallback();
+                source = "CONSTANT-RATE PLACEHOLDER -- NOT MODEL OUTPUT";
+                Console.WriteLine(
+                    "[DWM] ***********************************************************\n" +
+                    "[DWM] WARNING: turbine package built from the constant-rate\n" +
+                    "[DWM] placeholder, NOT from the Simulink model. The rotor will\n" +
+                    "[DWM] look completely normal on screen, so nothing downstream\n" +
+                    "[DWM] will reveal this. Do NOT describe this build as simulation\n" +
+                    "[DWM] output in any demo or campaign material.\n" +
+                    "[DWM] ***********************************************************");
+            }
+            else
+            {
+                throw new FileNotFoundException(
+                    "WriteTurbine found no simulation results, and allowFallback is false.\n\n" +
+                    $"  Looked for: {simResultsCsv ?? "(null -- no path was passed)"}\n\n" +
+                    "Produce it in MATLAB with:\n" +
+                    "    out = wtRunSimulation();\n" +
+                    "    wtExportSimSamples(out, 'wtSimSamples.csv');\n\n" +
+                    "Pass allowFallback: true ONLY if you deliberately want the constant-rate " +
+                    "placeholder. It is not model output and is indistinguishable on screen " +
+                    "from data that is.",
+                    simResultsCsv ?? "(none)");
+            }
+
+            using var tx = conn.BeginTransaction();
+
+            Exec(conn, tx,
+                "INSERT INTO WorldInfo (WorldId, Name, Description, SchemaVersion) VALUES ($id,$n,$d,$v);",
+                ("$id", worldId), ("$n", "Mountain Wind Turbine"),
+                ("$d", "Rotor motion from the R2011a Simulink turbine model (wtTurbine3MW). " +
+                       "Lumped-parameter engineering model -- NOT Simscape Multibody, NOT " +
+                       "CAD-linked multibody dynamics. See SCOPE.md 2026-08-02."),
+                ("$v", SchemaVersion));
+
+            const string rotorBlockId = "block_rotor";
+            Exec(conn, tx,
+                "INSERT INTO Blocks (BlockId, Name, BlockType) VALUES ($id,$n,$t);",
+                ("$id", rotorBlockId), ("$n", "TurbineRotor"), ("$t", "RigidBody"));
+
+            // DESCRIPTIVE METADATA ONLY -- none of this drives the motion, which comes entirely
+            // from SimSamples below. It travels with the package so the UE side and anyone
+            // inspecting the .db can see what machine produced the curve.
+            //
+            // KEEP IN SYNC WITH wtParameters.m. These are duplicated here rather than read from
+            // the model because the C# layer has no MATLAB dependency and is not getting one for
+            // four numbers -- but duplication means they can drift, and drift here is silent.
+            InsertParam(conn, tx, rotorBlockId, "bladeLength",   58.5,    "m");     // BOM 1100
+            InsertParam(conn, tx, rotorBlockId, "bladeCount",     3.0,    "count");
+            InsertParam(conn, tx, rotorBlockId, "ratedPower",     3.0e6,  "W");     // wtTurbine3MW
+            InsertParam(conn, tx, rotorBlockId, "gearboxRatio", 104.3,    "-");     // BOM 2300
+
+            // !!! PLACEHOLDER ASSET PATH -- MUST BE REPLACED BEFORE THIS RENDERS ANYTHING !!!
+            // The Mountain turbine mesh was placed on Day 21; its real content path is not
+            // recorded in any document this exporter can see. A wrong path here binds nothing
+            // and the rotor simply will not appear, with no error -- so treat a turbine that
+            // does not show up as this line first, before suspecting the data.
+            Exec(conn, tx,
+                "INSERT INTO AssetBindings (BlockId, AssetPath, AssetType, Role) VALUES ($id,$p,$at,$r);",
+                ("$id", rotorBlockId),
+                ("$p", "REPLACE_ME/WindTurbineRotor"),
+                ("$at", "StaticMesh"), ("$r", "Visual"));
+
+            foreach (var s in samples)
+            {
+                Exec(conn, tx,
+                    "INSERT INTO SimSamples (BlockId, Time, Position, Velocity) VALUES ($id,$t,$p,$v);",
+                    ("$id", rotorBlockId), ("$t", s.Time), ("$p", s.Position), ("$v", s.Velocity));
+            }
+
+            tx.Commit();
+
+            var lastAzimuth = samples[samples.Count - 1].Position;
+            Console.WriteLine(
+                $"[DWM] Wrote {samples.Count} turbine sim samples ({source}). " +
+                $"Azimuth spans {lastAzimuth:F2} rad " +
+                $"({lastAzimuth / (2 * Math.PI):F1} revolutions, UNWRAPPED -- " +
+                "the UE actor takes the modulus at read time).");
+        }
+
+        /// <summary>
+        /// Constant-rate rotor placeholder. Reachable only via WriteTurbine's explicit
+        /// allowFallback flag -- see the remarks on that method for why it is not the default.
+        /// </summary>
+        private static List<Sample> GenerateConstantRotationFallback()
+        {
+            // 12.5 rpm, mid-range for a 3 MW machine. Deliberately CONSTANT: this makes no
+            // attempt to imitate the model, because a placeholder that imitated the model well
+            // would be harder to notice, which is the opposite of what a placeholder should be.
+            var list = new List<Sample>();
+            double omega = 12.5 * 2.0 * Math.PI / 60.0;   // rad/s
+            for (int i = 0; i <= 300; i++)
+            {
+                double t = i / 30.0;
+                list.Add(new Sample(t, omega * t, omega));
+            }
+            return list;
         }
 
         // ------------------------------------------------------------------
