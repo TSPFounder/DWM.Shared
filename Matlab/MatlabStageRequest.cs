@@ -28,6 +28,24 @@ namespace DWM.Shared.Matlab
         /// <summary>Where the CSVs are written. Defaults to TurbineCodeDirectory.</summary>
         public string? CsvOutputDirectory { get; init; }
 
+        /// <summary>
+        /// MATLAB's current folder for the run. Null means "decide by how the session was
+        /// obtained", which is not the same thing in the two cases:
+        ///
+        ///   LAUNCHED session  -> cd to TurbineCodeDirectory. A MATLAB started by COM begins in
+        ///                        ITS OWN INSTALL DIRECTORY, typically C:\Program Files\MATLAB\
+        ///                        &lt;release&gt;, which is NOT WRITABLE. wtBuildModel saves
+        ///                        wtTurbine3MW.mdl relative to the current folder, so the run
+        ///                        dies with "Permission denied" on a path nobody chose.
+        ///   ATTACHED session  -> leave it alone. It is the user's own MATLAB, already sitting
+        ///                        where they put it, and moving someone's current folder out
+        ///                        from under them is the side effect ADDPATH was chosen over CD
+        ///                        to avoid in the first place.
+        ///
+        /// Setting this explicitly overrides both and always cds.
+        /// </summary>
+        public string? WorkingDirectory { get; init; }
+
         /// <summary>Export sample rate in Hz, matching wtGui's field. 30 is the default.</summary>
         public int SampleRateHz { get; init; } = 30;
 

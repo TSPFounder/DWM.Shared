@@ -112,8 +112,24 @@ namespace DWM.Shared.Matlab
 
             using var session = _sessionFactory();
 
-            // ADDPATH, not CD. The user's current folder is theirs; an attached session is one
-            // they are working in. addpath is idempotent and does not move them.
+            // CURRENT FOLDER, but only when we have to. See MatlabStageRequest.WorkingDirectory:
+            // a MATLAB this code LAUNCHED starts in its own install directory, which is not
+            // writable, and wtBuildModel saves the model relative to the current folder. An
+            // ATTACHED session belongs to the user and is left where they put it.
+            var workingDirectory = request.WorkingDirectory;
+            if (string.IsNullOrWhiteSpace(workingDirectory) && !session.IsAttachedToExistingInstance)
+                workingDirectory = request.TurbineCodeDirectory;
+
+            if (!string.IsNullOrWhiteSpace(workingDirectory))
+            {
+                RunGuarded(session,
+                    $"cd({MatlabLiteral(workingDirectory!)});",
+                    "setting MATLAB's current folder");
+            }
+
+            // ADDPATH, not CD, for the code location itself. Even when the cd above ran, the two
+            // are different jobs: one decides where output lands, the other makes the functions
+            // findable, and they need not be the same directory.
             RunGuarded(session,
                 $"addpath({MatlabLiteral(request.TurbineCodeDirectory)});",
                 "adding the turbine folder to MATLAB's path");
@@ -219,6 +235,10 @@ namespace DWM.Shared.Matlab
             if (!Directory.Exists(r.ResolvedCsvDirectory))
                 throw new MatlabStageException(
                     $"CSV output directory does not exist: {r.ResolvedCsvDirectory}");
+
+            if (!string.IsNullOrWhiteSpace(r.WorkingDirectory) && !Directory.Exists(r.WorkingDirectory))
+                throw new MatlabStageException(
+                    $"WorkingDirectory does not exist: {r.WorkingDirectory}");
         }
 
         /// <summary>
@@ -241,7 +261,8 @@ namespace DWM.Shared.Matlab
                     $"MATLAB raised an error while {whatItWasDoing}.\n\n" +
                     $"  MATLAB said: {error.Trim()}\n\n" +
                     $"  Command was: {command}" +
-                    UndefinedFunctionHint(error));
+                    UndefinedFunctionHint(error) +
+                    PermissionDeniedHint(error));
             }
         }
 
@@ -273,6 +294,27 @@ namespace DWM.Shared.Matlab
                    "  Find the right one -- in MATLAB, run:\n" +
                    "      which wtRunSimulation\n" +
                    "  and pass the folder it reports.";
+        }
+
+        /// <summary>
+        /// Guidance for the second thing that goes wrong on a fresh machine, which this stage
+        /// now prevents but which can still be reached by pointing WorkingDirectory somewhere
+        /// read-only.
+        /// </summary>
+        private static string PermissionDeniedHint(string matlabError)
+        {
+            if (matlabError.IndexOf("Permission denied", StringComparison.OrdinalIgnoreCase) < 0 &&
+                matlabError.IndexOf("for writing", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return string.Empty;
+            }
+
+            return "\n\n" +
+                   "  LIKELY CAUSE: MATLAB's current folder is not writable. wtBuildModel saves\n" +
+                   "  wtTurbine3MW.mdl RELATIVE TO THE CURRENT FOLDER, and a MATLAB launched over\n" +
+                   "  COM starts in its own install directory (C:\\Program Files\\MATLAB\\<release>),\n" +
+                   "  which is read-only. Set WorkingDirectory to somewhere writable, or open\n" +
+                   "  MATLAB yourself so this attaches to a session already in a sensible folder.";
         }
 
         /// <summary>
