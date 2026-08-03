@@ -24,8 +24,25 @@ namespace DWM.Shared.Matlab
 {
     public sealed class MatlabComSession : IMatlabSession
     {
-        /// <summary>The ProgID ToolStatusService already probes for its MATLAB status dot.</summary>
-        public const string ProgId = "matlab.application";
+        /// <summary>
+        /// The version-agnostic ProgID, and the one ToolStatusService probes for its MATLAB
+        /// status dot.
+        ///
+        /// IT DOES NOT MEAN "WHICHEVER MATLAB IS RUNNING". It resolves to a single CLSID --
+        /// whichever MATLAB registered itself last, typically the newest installed. On a machine
+        /// with more than one release that is the WRONG ONE for this project: the MVP turbine
+        /// model runs under R2011a (SCOPE.md 2026-08-02).
+        ///
+        /// The consequence is sharper than "it might pick the wrong one". GetActiveObject
+        /// resolves this ProgID to a CLSID and then looks for THAT CLSID in the Running Object
+        /// Table, so with R2011a open and R2025b registered, the attach does not find the open
+        /// R2011a -- it misses, and a new R2025b is launched instead. Passing a versioned
+        /// ProgID to the constructor is the fix; see the progId parameter.
+        /// </summary>
+        public const string DefaultProgId = "matlab.application";
+
+        /// <summary>The ProgID this session actually used.</summary>
+        public string ProgId { get; }
 
         private object? _matlab;
         private readonly bool _weLaunchedIt;
@@ -45,15 +62,29 @@ namespace DWM.Shared.Matlab
         /// When false, refuse to start a new MATLAB and throw instead. Useful for a UI that
         /// wants to say "start MATLAB first" rather than silently spending 30 seconds.
         /// </param>
+        /// <param name="progId">
+        /// Which MATLAB. Defaults to <see cref="DefaultProgId"/>, which is only correct on a
+        /// machine with ONE MATLAB installed.
+        ///
+        /// MATLAB also registers a VERSIONED ProgID alongside the generic one -- for R2011a
+        /// (MATLAB 7.12) that is "matlab.application.7.12". Passing it makes both the Running
+        /// Object Table attach and any launch target that specific release, which is the only
+        /// reliable way to reach R2011a on a machine that also has a current MATLAB.
+        ///
+        /// To see what is registered, from a command prompt:
+        ///     reg query HKCR /f "matlab.application" /k
+        /// </param>
         [SupportedOSPlatform("windows")]
-        public MatlabComSession(bool allowLaunch = true)
+        public MatlabComSession(bool allowLaunch = true, string? progId = null)
         {
             if (!OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException(
                     "MatlabComSession requires Windows COM automation. On any other platform, " +
                     "supply a different IMatlabSession implementation.");
 
-            _matlab = TryAttachToRunningInstance();
+            ProgId = string.IsNullOrWhiteSpace(progId) ? DefaultProgId : progId!;
+
+            _matlab = TryAttachToRunningInstance(ProgId);
             if (_matlab is not null)
             {
                 _weLaunchedIt = false;
@@ -62,15 +93,26 @@ namespace DWM.Shared.Matlab
 
             if (!allowLaunch)
                 throw new MatlabStageException(
-                    "No running MATLAB was found, and launching one was not permitted.\n\n" +
+                    $"No running MATLAB was found for ProgID '{ProgId}', and launching one was " +
+                    "not permitted.\n\n" +
                     "Start MATLAB, open the turbine folder, and try again -- or pass " +
                     "allowLaunch: true to have this start one (expect a cold start to take " +
-                    "tens of seconds).");
+                    "tens of seconds).\n\n" +
+                    (ProgId == DefaultProgId
+                        ? "NOTE: '" + DefaultProgId + "' resolves to ONE release -- whichever " +
+                          "registered last. If the MATLAB you want is open but a newer one is " +
+                          "installed, the attach looks for the newer one's CLSID and misses. " +
+                          "Pass the versioned ProgID instead, e.g. 'matlab.application.7.12' " +
+                          "for R2011a."
+                        : "The versioned ProgID was used, so this means no MATLAB of that " +
+                          "release is currently running."));
 
             var type = Type.GetTypeFromProgID(ProgId);
             if (type is null)
                 throw new MatlabStageException(
                     $"MATLAB's COM server ('{ProgId}') is not registered on this machine.\n\n" +
+                    "If this was a versioned ProgID, check the exact spelling with:\n" +
+                    "    reg query HKCR /f \"matlab.application\" /k\n\n" +
                     "This usually means MATLAB is not installed, or was installed without " +
                     "registering the automation server. Re-register with:\n" +
                     "    matlab -regserver\n" +
@@ -100,12 +142,17 @@ namespace DWM.Shared.Matlab
             TrySetVisible(true);
         }
 
-        /// <summary>Wrap an already-obtained COM object, for callers using another transport.</summary>
+        /// <summary>
+        /// Wrap an already-obtained COM object, for callers using another transport.
+        /// <paramref name="progId"/> is recorded for reporting only -- this constructor does no
+        /// resolution, so it is whatever the caller says it is.
+        /// </summary>
         [SupportedOSPlatform("windows")]
-        public MatlabComSession(object matlabComObject, bool weLaunchedIt = false)
+        public MatlabComSession(object matlabComObject, bool weLaunchedIt = false, string? progId = null)
         {
             _matlab = matlabComObject ?? throw new ArgumentNullException(nameof(matlabComObject));
             _weLaunchedIt = weLaunchedIt;
+            ProgId = string.IsNullOrWhiteSpace(progId) ? "(supplied instance)" : progId!;
         }
 
         // ------------------------------------------------------------------
@@ -185,7 +232,7 @@ namespace DWM.Shared.Matlab
         }
 
         [SupportedOSPlatform("windows")]
-        private static object? TryAttachToRunningInstance()
+        private static object? TryAttachToRunningInstance(string progId)
         {
             // Marshal.GetActiveObject WAS the one-liner for this and was REMOVED in .NET Core.
             // It has never returned to .NET, so the Running Object Table has to be reached
@@ -193,15 +240,21 @@ namespace DWM.Shared.Matlab
             // a workaround.
             try
             {
-                CLSIDFromProgID(ProgId, out var clsid);
+                CLSIDFromProgID(progId, out var clsid);
                 GetActiveObject(ref clsid, IntPtr.Zero, out var instance);
                 return instance;
             }
             catch (Exception)
             {
-                // Nothing in the ROT (MOST COMMON -- MATLAB simply is not running), or the
-                // ProgID is not registered. Both are ordinary, and both mean "no instance to
-                // attach to"; the caller decides whether to launch one.
+                // Nothing in the ROT, or the ProgID is not registered. Both are ordinary and
+                // both mean "no instance to attach to"; the caller decides whether to launch.
+                //
+                // WORTH KNOWING WHEN THIS SURPRISES YOU: the lookup is by CLSID, not by name.
+                // CLSIDFromProgID resolves the ProgID to one CLSID and GetActiveObject then
+                // searches the ROT for exactly that. So a generic ProgID pointing at R2025b
+                // will MISS an open R2011a and report "nothing running" while the release you
+                // wanted is on screen. That is not a bug here -- it is what the generic ProgID
+                // means -- but it is the least intuitive failure in this file.
                 return null;
             }
         }
