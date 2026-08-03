@@ -240,8 +240,39 @@ namespace DWM.Shared.Matlab
                 throw new MatlabStageException(
                     $"MATLAB raised an error while {whatItWasDoing}.\n\n" +
                     $"  MATLAB said: {error.Trim()}\n\n" +
-                    $"  Command was: {command}");
+                    $"  Command was: {command}" +
+                    UndefinedFunctionHint(error));
             }
+        }
+
+        /// <summary>
+        /// Extra guidance for the one failure that is overwhelmingly the FIRST thing to go wrong
+        /// on a new machine: the turbine .m files are not where the caller said they were.
+        ///
+        /// It is easy to get wrong in a specific way. The Simulink model (wtTurbine3MW.mdl) and
+        /// the functions that build and run it do not have to live in the same folder, and
+        /// MATLAB's default working directory is a natural place for the model to sit while the
+        /// code sits in the project repository. ADDPATH on the wrong one of those two succeeds
+        /// silently -- adding a real directory that happens to contain no .m files is not an
+        /// error -- so the failure surfaces one command later, pointing at the function rather
+        /// than at the path.
+        /// </summary>
+        private static string UndefinedFunctionHint(string matlabError)
+        {
+            if (matlabError.IndexOf("Undefined function", StringComparison.OrdinalIgnoreCase) < 0 &&
+                matlabError.IndexOf("Undefined command", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return string.Empty;
+            }
+
+            return "\n\n" +
+                   "  LIKELY CAUSE: TurbineCodeDirectory does not contain the turbine .m files.\n" +
+                   "  ADDPATH on a directory with no .m files in it SUCCEEDS, so the mistake does\n" +
+                   "  not surface until the function is called. Note that wtTurbine3MW.mdl and the\n" +
+                   "  wt*.m sources need not live in the same folder.\n\n" +
+                   "  Find the right one -- in MATLAB, run:\n" +
+                   "      which wtRunSimulation\n" +
+                   "  and pass the folder it reports.";
         }
 
         /// <summary>
