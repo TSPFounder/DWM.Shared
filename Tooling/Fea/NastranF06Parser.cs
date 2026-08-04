@@ -48,6 +48,14 @@ namespace DWM.Shared.Tooling.Fea
 
         public IReadOnlyList<string> WarningMessages { get; init; } = Array.Empty<string>();
 
+        /// <summary>
+        /// MYSTRAN's *INFORMATION lines. Collected because some of them change the model:
+        /// the 2026-08-03 tower run reported "MAT1 ENTRY 1 HAD FIELD FOR G BLANK. MYSTRAN
+        /// CALCULATED G = 8.076923E+10" -- the solver supplied a material property the deck
+        /// omitted. That is not a warning and not an error, and it is worth knowing.
+        /// </summary>
+        public IReadOnlyList<string> InfoMessages { get; init; } = Array.Empty<string>();
+
         public bool HasFatal => FatalMessages.Count > 0;
 
         public double? FirstFrequencyHz => Modes.Count > 0 ? Modes[0].Hertz : null;
@@ -81,6 +89,7 @@ namespace DWM.Shared.Tooling.Fea
             var modes = new List<ModalResult>();
             var fatals = new List<string>();
             var warnings = new List<string>();
+            var infos = new List<string>();
 
             var lines = (f06Text ?? string.Empty).Split('\n');
             var inTable = false;
@@ -93,6 +102,8 @@ namespace DWM.Shared.Tooling.Fea
                     fatals.Add(line.Trim());
                 else if (line.IndexOf("WARNING", StringComparison.OrdinalIgnoreCase) >= 0)
                     warnings.Add(line.Trim());
+                else if (line.IndexOf("*INFORMATION", StringComparison.OrdinalIgnoreCase) >= 0)
+                    infos.Add(line.Trim());
 
                 var squeezed = Squeeze(line);
 
@@ -120,7 +131,8 @@ namespace DWM.Shared.Tooling.Fea
             {
                 Modes = modes.OrderBy(m => m.ModeNumber).ToList(),
                 FatalMessages = fatals,
-                WarningMessages = warnings
+                WarningMessages = warnings,
+                InfoMessages = infos
             };
         }
 
@@ -195,7 +207,22 @@ namespace DWM.Shared.Tooling.Fea
             return false;
         }
 
+        /// <summary>
+        /// What ends the eigenvalue table.
+        ///
+        /// ">> LINK n END" is MYSTRAN's own phase marker and appears immediately after the
+        /// table, which makes it the tightest terminator available. It matters more than it
+        /// looks: AN EIGENVECTOR GRID ROW IS STRUCTURALLY IDENTICAL TO A MODE ROW -- two
+        /// leading integers followed by numeric columns -- so if the table is never closed,
+        /// every grid line of every mode shape is read as a mode. Measured against the real
+        /// 2026-08-03 tower run, that is 72 bogus "modes" instead of 6.
+        ///
+        /// The EIGENVECTOR checks alone happen to catch it in that file, but only because
+        /// MYSTRAN prints "OUTPUT FOR EIGENVECTOR" first. Relying on that is luck; the LINK
+        /// marker makes it structural.
+        /// </summary>
         private static bool IsSectionHeader(string squeezed) =>
+            squeezed.Contains(">>LINK", StringComparison.OrdinalIgnoreCase) ||
             squeezed.Contains("EIGENVECTOR", StringComparison.OrdinalIgnoreCase) ||
             squeezed.Contains("DISPLACEMENTVECTOR", StringComparison.OrdinalIgnoreCase) ||
             squeezed.Contains("ENDOFJOB", StringComparison.OrdinalIgnoreCase);
