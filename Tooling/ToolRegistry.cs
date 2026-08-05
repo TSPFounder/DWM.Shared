@@ -82,6 +82,16 @@ namespace DWM.Shared.Tooling
                 // VERSIONED FIRST. The MVP turbine model runs under R2011a (SCOPE.md
                 // 2026-08-02) and the generic entry reaches whichever release registered last.
                 ProgIds = new[] { "Matlab.Application.7.12", "Matlab.Application.25.2", "Matlab.Application" },
+                // For LAUNCHING a session the user keeps, rather than automating one. A MATLAB
+                // started through COM is owned by its client and exits when the last reference
+                // is released, so a hand-off has to start the executable instead. R2011a first,
+                // matching the ProgID order and for the same reason.
+                ExecutableCandidates = new[]
+                {
+                    @"C:\Program Files\MATLAB\R2011a\bin\matlab.exe",
+                    @"C:\Program Files\MATLAB\R2025b\bin\matlab.exe",
+                    "matlab.exe"
+                },
                 ArtifactExtensions = new[] { ".m", ".mdl", ".slx", ".mat" },
                 ResultExtensions = new[] { ".csv" },
                 KnownLimitation =
