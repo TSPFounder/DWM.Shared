@@ -90,12 +90,18 @@ namespace DWM.Shared.Tooling.Fea
         /// FEMAP's Model Info tree does not repaint when entities arrive through the API
         /// rather than through its own dialogs, so a load that worked -- Out: 6 in the status
         /// bar -- can leave the Results node looking empty. The data is there; the tree simply
-        /// has not been told.
+        /// has not been told. Confirmed on 2026-08-05: the tree's own <b>Reload from Model</b>
+        /// button populated it immediately with all six modes, no re-import involved.
         ///
-        /// These names are UNVERIFIED, and unlike the import calls that is fine here: a
-        /// cosmetic refresh that does not happen costs one click on the PostProcessing tab,
-        /// so every one of them is attempted and every failure ignored. Guessing is only
-        /// dangerous when being wrong does damage.
+        /// These names are UNVERIFIED and may all three be wrong. Unlike the import calls that
+        /// is acceptable here, because the fallback is KNOWN AND CHEAP -- Reload from Model,
+        /// second button on the Model Info toolbar -- so every candidate is attempted and every
+        /// failure ignored. Guessing is only dangerous when being wrong does damage, and the
+        /// worst case here is a tree that needs one click.
+        ///
+        /// Which is also why nothing downstream may treat a repainted tree as evidence that
+        /// the import worked, or an empty one as evidence that it did not. The status bar's
+        /// output-set count is the fact; this is cosmetics.
         /// </summary>
         public IReadOnlyList<string> RefreshUi { get; init; } = new[]
         {
