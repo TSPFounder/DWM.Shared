@@ -77,6 +77,14 @@ namespace DWM.Shared.Tooling.Fea
             }
         };
 
+        /// <summary>
+        /// NEVER LIST THE MODEL READER HERE. An earlier version ended this list with
+        /// feFileReadNastran(setId, filename) as a last resort, which handed the .OP2 to the
+        /// MODEL importer -- so the call did not throw, TryShapes counted it as success, and
+        /// FEMAP came away with the model intact, zero output sets and "Errors have Occurred".
+        /// A fallback that succeeds by doing the wrong thing is worse than no fallback, because
+        /// it also stops the search before anything correct is tried.
+        /// </summary>
         public IReadOnlyList<FemapCallShape> ReadNastranResults { get; init; } = new[]
         {
             new FemapCallShape
@@ -93,9 +101,9 @@ namespace DWM.Shared.Tooling.Fea
             },
             new FemapCallShape
             {
-                Method = "feFileReadNastran",
+                Method = "feFileReadNastranResults2",
                 Args = path => new object[] { 1, path },
-                Signature = "feFileReadNastran(setId, filename) -- if this one reads RESULTS"
+                Signature = "feFileReadNastranResults2(setId, filename)"
             }
         };
 
