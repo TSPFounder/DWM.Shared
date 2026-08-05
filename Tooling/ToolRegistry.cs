@@ -145,6 +145,7 @@ namespace DWM.Shared.Tooling
                 // otherwise report NotFound while plainly being installed.
                 ExecutableCandidates = new[] { @"C:\FEMAPv102\femap.exe" },
                 ExecutableSearchRoots = new[] { @"C:\FEMAPv102" },
+                ExecutableSearchPatterns = new[] { "femap*.exe" },
                 ArtifactExtensions = new[] { ".modfem", ".neu" },
                 ResultExtensions = new[] { ".bdf", ".dat" },
                 KnownLimitation =
@@ -158,13 +159,17 @@ namespace DWM.Shared.Tooling
                 Kind = ToolKind.BatchExecutable,
                 // Install directory confirmed 2026-08-03. The executable name and whether it
                 // sits in a bin/ subfolder are still guesses, hence several candidates.
+                // CONFIRMED 2026-08-03: the installed binary is version-stamped,
+                // C:\Mystran\mystran-19.0.0-windows-x86_64.exe. The exact path is listed first
+                // because it is a cheap direct hit, and the PATTERN below is what actually
+                // matters -- pinning this filename alone would break on the next release.
                 ExecutableCandidates = new[]
                 {
+                    @"C:\Mystran\mystran-19.0.0-windows-x86_64.exe",
                     @"C:\Mystran\mystran.exe",
-                    @"C:\Mystran\bin\mystran.exe",
-                    @"C:\Mystran\Mystran.exe",
                     "mystran.exe"          // on PATH
                 },
+                ExecutableSearchPatterns = new[] { "mystran*.exe" },
                 // Confirmed install root, 2026-08-03. Searched because none of the exact
                 // paths above matched on the machine that has it installed there.
                 ExecutableSearchRoots = new[] { @"C:\Mystran", @"C:\MYSTRAN" },
