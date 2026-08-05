@@ -139,7 +139,10 @@ namespace DWM.Shared.Tooling
         private static WorldTreeNode BuildStage(
             PipelineStageDefinition stage,
             ToolDescriptor? tool,
-            string projectRoot,
+            // Nullable, because a world that has never named a project root is an ordinary
+            // state and this method already handles it -- declaring it non-null merely moved
+            // the problem to a warning at the call site.
+            string? projectRoot,
             Func<string, IReadOnlyList<ToolRun>>? runsForStage,
             int maxResults)
         {
@@ -196,12 +199,18 @@ namespace DWM.Shared.Tooling
         /// writes them and why the solve runs in the deck's own folder. Without an artifact,
         /// the project root is scanned instead, which is the MATLAB stage: it authors no
         /// single document and exports channel CSVs into the model folder.
+        ///
+        /// NOT AN ITERATOR, and that is a language rule rather than a preference: C# forbids
+        /// yield return inside a try that has a catch clause (CS1626), and inside a catch at
+        /// all (CS1631). Every branch here either scans a directory or reports why it could
+        /// not, so the whole body sits inside error handling and it returns a list instead.
         /// </summary>
-        private static IEnumerable<WorldTreeNode> ResultNodes(
-            string? artifactPath, string projectRoot,
+        private static List<WorldTreeNode> ResultNodes(
+            string? artifactPath, string? projectRoot,
             PipelineStageDefinition stage, ToolDescriptor? tool, int maxResults)
         {
-            if (tool is null || tool.ResultExtensions.Count == 0) yield break;
+            var nodes = new List<WorldTreeNode>();
+            if (tool is null || tool.ResultExtensions.Count == 0) return nodes;
 
             string? folder;
             string? stem = null;
@@ -216,7 +225,7 @@ namespace DWM.Shared.Tooling
                 folder = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
             }
 
-            if (folder is null) yield break;
+            if (folder is null) return nodes;
 
             List<string> found;
             try
@@ -226,14 +235,14 @@ namespace DWM.Shared.Tooling
                     // Not an error worth shouting about -- an FEA folder that does not exist
                     // yet is the ordinary state of a project nobody has solved. Reported so
                     // "no results" and "nowhere to look" stay distinguishable.
-                    yield return new WorldTreeNode
+                    nodes.Add(new WorldTreeNode
                     {
                         Label = "Folder not found",
                         Kind = WorldTreeNodeKind.Note,
                         StageId = stage.Id,
                         Detail = folder
-                    };
-                    yield break;
+                    });
+                    return nodes;
                 }
 
                 found = Directory.EnumerateFiles(folder)
@@ -255,29 +264,31 @@ namespace DWM.Shared.Tooling
             {
                 // A tree that throws takes the window with it. Say what went wrong in the row
                 // where the answer would have been.
-                yield return new WorldTreeNode
+                nodes.Add(new WorldTreeNode
                 {
                     Label = "Could not read folder",
                     Kind = WorldTreeNodeKind.Note,
                     StageId = stage.Id,
                     Detail = FirstLine(ex.Message)
-                };
-                yield break;
+                });
+                return nodes;
             }
 
             foreach (var f in found.Take(maxResults))
-                yield return FileNode(f, WorldTreeNodeKind.Result, stage, tool);
+                nodes.Add(FileNode(f, WorldTreeNodeKind.Result, stage, tool));
 
             if (found.Count > maxResults)
             {
-                yield return new WorldTreeNode
+                nodes.Add(new WorldTreeNode
                 {
                     Label = $"...and {found.Count - maxResults} more",
                     Kind = WorldTreeNodeKind.Note,
                     StageId = stage.Id,
                     Detail = $"{found.Count} result files in {folder}"
-                };
+                });
             }
+
+            return nodes;
         }
 
         private static WorldTreeNode FileNode(
