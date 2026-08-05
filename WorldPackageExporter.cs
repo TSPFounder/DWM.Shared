@@ -528,8 +528,44 @@ namespace DWM.Shared
                 "block_pitch", "BladePitch",  "RigidBody", "REPLACE_ME/WindTurbineBlade");
             extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "yaw",
                 "block_yaw",   "Nacelle",     "RigidBody", "REPLACE_ME/WindTurbineNacelle");
-            extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "tower",
+
+            var towerSamples = SeedTurbineChannel(conn, tx, simResultsCsv, "tower",
                 "block_tower", "Tower",       "RigidBody", "REPLACE_ME/WindTurbineTower");
+            extraTotal += towerSamples;
+
+            // ----------------------------------------------------------------
+            // THE FEA RESULT TRAVELS WITH THE PACKAGE, AND SO DOES ITS DISAGREEMENT.
+            //
+            // These are the only numbers in this file measured by a solver rather than
+            // copied from a model, and BOTH are written on purpose:
+            //
+            //   f_tower_measured  0.2810991 Hz   MYSTRAN 19.0.0 SOL 103 on wtTowerModal.dat
+            //   f_tower_model     0.320     Hz   what the Simulink model assumes
+            //
+            // They differ by 13.8%, and publishing only one of them would be the more
+            // comfortable choice and the wrong one. Three independent methods agree on the
+            // measured figure to 0.14% -- a numpy 10-element beam (0.2815), MYSTRAN
+            // (0.2810991) and FEMAP reading the same .op2 (0.281099) -- so the model's 0.320
+            // is the outlier. Shipping the pair makes a verification gate that CAUGHT a 14%
+            // modelling error visible in the data, which is a stronger claim than a clean
+            // number and the only honest one.
+            //
+            // Nothing consumes these yet, and that is fine: Parameters is descriptive by
+            // design, it has a Unit column, and a scalar with units is what a modal frequency
+            // is. NOT SimSamples -- that table is keyed on (BlockId, Time) and a mode shape is
+            // not on a timeline. Forcing it in there would be the smuggling the fragility
+            // audit's item 1 warns about.
+            //
+            // GUARDED ON THE BLOCK EXISTING. SeedTurbineChannel returns 0 WITHOUT creating the
+            // block when the sibling CSV is absent, which is the ordinary rotor-only path that
+            // every existing test takes. The mechanism schema has NO FOREIGN KEYS (audit item
+            // 2), so an unguarded insert here would not fail -- it would quietly write two
+            // parameter rows pointing at a block that does not exist, and verify green.
+            if (towerSamples > 0)
+            {
+                InsertParam(conn, tx, "block_tower", "f_tower_measured", 0.2810991, "Hz");
+                InsertParam(conn, tx, "block_tower", "f_tower_model",    0.320,     "Hz");
+            }
 
             // NOT KINEMATIC, and deliberately so. BlockType 'Signal' marks a block
             // whose Position and Velocity are two plain channel slots rather than an
