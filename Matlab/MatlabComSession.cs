@@ -47,8 +47,22 @@ namespace DWM.Shared.Matlab
         private object? _matlab;
         private readonly bool _weLaunchedIt;
         private bool _disposed;
+        private bool _leaveRunning;
 
         public bool IsAttachedToExistingInstance => !_weLaunchedIt;
+
+        /// <summary>
+        /// Release this session WITHOUT quitting MATLAB, even when this object launched it.
+        ///
+        /// Dispose normally quits an instance it started, which is right for a batch job: run
+        /// the model, take the results, clean up. It is exactly WRONG for a hand-off. Opening
+        /// wtGui and then disposing would launch MATLAB, start the GUI, and close it again --
+        /// from the outside, indistinguishable from nothing having happened at all.
+        ///
+        /// Call this when the point of the session was to LEAVE something running for the
+        /// user. The COM reference is still released on Dispose; only the Quit is skipped.
+        /// </summary>
+        public void Detach() => _leaveRunning = true;
 
         /// <summary>
         /// Attach to a MATLAB the user already has open; launch one only if there is none.
@@ -278,8 +292,10 @@ namespace DWM.Shared.Matlab
 
             // NEVER quit a MATLAB we attached to. The user has the turbine model open in it;
             // closing their session because an export finished would be an unpleasant surprise
-            // and would lose unsaved work. Only an instance we launched is ours to close.
-            if (_weLaunchedIt)
+            // and would lose unsaved work. Only an instance we launched is ours to close --
+            // and not even then if Detach() was called, which is how a hand-off says "this
+            // one is the user's now".
+            if (_weLaunchedIt && !_leaveRunning)
             {
                 try
                 {

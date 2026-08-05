@@ -57,7 +57,7 @@ namespace DWM.Shared.Matlab
         /// Prefixed to avoid colliding with anything in the user's base workspace -- an
         /// attached session shares its workspace with whatever they were doing.
         /// </summary>
-        private const string ErrorSentinel = "dwmStageErr";
+        public const string ErrorSentinel = "dwmStageErr";
 
         /// <summary>Variable the simulation output struct is parked in between the two commands.</summary>
         private const string OutputVariable = "dwmStageOut";
