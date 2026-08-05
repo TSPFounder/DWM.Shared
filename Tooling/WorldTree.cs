@@ -136,6 +136,46 @@ namespace DWM.Shared.Tooling
             };
         }
 
+        /// <summary>
+        /// The same tree for ONE stage, rooted at that stage -- what a tool's own workspace
+        /// window shows.
+        ///
+        /// A workspace window is about a single tool, so the whole-world tree would be mostly
+        /// rows it cannot act on. This returns the subtree it can: the deck it works on, the
+        /// results beside it, and the runs from this session.
+        ///
+        /// It takes the <see cref="ToolWorkspaceModel"/> the window is already built from
+        /// rather than re-deriving paths, because the artifact path there has ALREADY been
+        /// resolved against the project root. Recomputing it independently is how two views of
+        /// one stage start disagreeing about where a file is.
+        /// </summary>
+        public static WorldTreeNode BuildForWorkspace(
+            ToolWorkspaceModel workspace,
+            ToolRegistry registry,
+            IReadOnlyList<ToolRun>? runs = null,
+            int maxResults = DefaultMaxResults)
+        {
+            if (workspace is null) throw new ArgumentNullException(nameof(workspace));
+            if (registry is null) throw new ArgumentNullException(nameof(registry));
+
+            var tool = workspace.ToolId is null ? null : registry.Find(workspace.ToolId);
+
+            var stage = new PipelineStageDefinition
+            {
+                Id = workspace.StageId,
+                Label = workspace.Title,
+                ToolId = workspace.ToolId,
+                ArtifactPath = workspace.ArtifactPath
+            };
+
+            // Title already reads "FEA Solve / MYSTRAN", so the tool name must not be appended
+            // again -- hence the override rather than letting BuildStage compose it.
+            return BuildStage(
+                stage, tool, workspace.ProjectRoot,
+                _ => runs ?? workspace.Runs, maxResults,
+                labelOverride: workspace.Title);
+        }
+
         private static WorldTreeNode BuildStage(
             PipelineStageDefinition stage,
             ToolDescriptor? tool,
@@ -144,7 +184,8 @@ namespace DWM.Shared.Tooling
             // the problem to a warning at the call site.
             string? projectRoot,
             Func<string, IReadOnlyList<ToolRun>>? runsForStage,
-            int maxResults)
+            int maxResults,
+            string? labelOverride = null)
         {
             var children = new List<WorldTreeNode>();
             string? artifactPath = null;
@@ -177,7 +218,8 @@ namespace DWM.Shared.Tooling
                 });
             }
 
-            var label = tool is null ? stage.Label : $"{stage.Label} / {tool.DisplayName}";
+            var label = labelOverride
+                        ?? (tool is null ? stage.Label : $"{stage.Label} / {tool.DisplayName}");
             if (stage.IsOptional) label += "  (optional)";
 
             return new WorldTreeNode
