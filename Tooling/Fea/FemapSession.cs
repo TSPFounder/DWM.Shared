@@ -85,6 +85,26 @@ namespace DWM.Shared.Tooling.Fea
         public string SetVisible { get; init; } = "feAppVisible";
 
         /// <summary>
+        /// Best-effort UI refresh, tried in order and ALL NON-FATAL.
+        ///
+        /// FEMAP's Model Info tree does not repaint when entities arrive through the API
+        /// rather than through its own dialogs, so a load that worked -- Out: 6 in the status
+        /// bar -- can leave the Results node looking empty. The data is there; the tree simply
+        /// has not been told.
+        ///
+        /// These names are UNVERIFIED, and unlike the import calls that is fine here: a
+        /// cosmetic refresh that does not happen costs one click on the PostProcessing tab,
+        /// so every one of them is attempted and every failure ignored. Guessing is only
+        /// dangerous when being wrong does damage.
+        /// </summary>
+        public IReadOnlyList<string> RefreshUi { get; init; } = new[]
+        {
+            "feAppUpdateWindows",
+            "feViewRegenerate",
+            "feAppRedisplay"
+        };
+
+        /// <summary>
         /// Start an empty model, so a repeat load has somewhere clean to land. Without it, a
         /// second load collides with the first: "Overwriting existing Property 101..110" and
         /// twelve output sets where six belong.

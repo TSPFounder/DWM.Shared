@@ -119,6 +119,14 @@ namespace DWM.Shared.Tooling.Fea
                 var modelShape = TryShapes(session, _api.ReadNastranModel, deckPath, "read the model");
                 var resultsShape = TryShapes(session, _api.ReadNastranResults, resultsPath, "read the results");
 
+                // Nudge the tree into repainting. Every one of these is best-effort: the
+                // import has already succeeded by the time we get here, and a refresh that
+                // does not happen costs one click on the PostProcessing tab.
+                foreach (var refresh in _api.RefreshUi)
+                {
+                    try { session.Invoke(refresh); } catch (Exception) { }
+                }
+
                 warnings.Add($"FEMAP accepted: {modelShape} and {resultsShape}. " +
                              "If these are the shapes that work on this FEMAP, they can be " +
                              "promoted to the only candidates -- the list exists because the " +
