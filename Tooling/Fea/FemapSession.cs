@@ -101,6 +101,25 @@ namespace DWM.Shared.Tooling.Fea
 
         /// <summary>Show the FEMAP window. Failure here is not fatal.</summary>
         public string SetVisible { get; init; } = "feAppVisible";
+
+        /// <summary>
+        /// Start an empty model, so a repeat load has somewhere clean to land.
+        ///
+        /// Needed because re-importing into a populated FEMAP does not replace -- it collides.
+        /// The 2026-08-05 second run produced "Overwriting existing Property 101..110",
+        /// "Overwriting existing Element 1..10" and a SECOND set of six output sets, leaving
+        /// twelve where there should be six. Nothing was lost, but the results view stopped
+        /// meaning one run.
+        /// </summary>
+        public IReadOnlyList<FemapCallShape> NewModel { get; init; } = new[]
+        {
+            new FemapCallShape
+            {
+                Method = "feFileNew",
+                Args = _ => Array.Empty<object>(),
+                Signature = "feFileNew()"
+            }
+        };
     }
 
     public interface IFemapSession : IDisposable

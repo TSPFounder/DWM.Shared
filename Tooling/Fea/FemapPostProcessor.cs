@@ -39,16 +39,31 @@ namespace DWM.Shared.Tooling.Fea
     {
         private readonly Func<IFemapSession> _sessionFactory;
         private readonly FemapApiNames _api;
+        private readonly bool _startNewModel;
 
         /// <param name="api">
         /// Override when a method name turns out wrong for this FEMAP. The names have not been
         /// checked against 10.2's reference, and they are data precisely so being wrong costs a
         /// caller one line rather than a rebuild.
         /// </param>
-        public FemapPostProcessor(Func<IFemapSession> sessionFactory, FemapApiNames? api = null)
+        /// <param name="startNewModel">
+        /// Clear FEMAP to an empty model before importing.
+        ///
+        /// DEFAULTS TO FALSE, and the reason is asymmetric damage. Leaving it off means a
+        /// repeat load collides with itself -- "Overwriting existing Property 101", twelve
+        /// output sets where six belong -- which is confusing but loses nothing. Turning it on
+        /// by default would discard whatever the user had open in FEMAP, which might be an
+        /// afternoon's meshing this code knows nothing about. A confusing results tree is
+        /// recoverable in one File > New; somebody else's unsaved model is not.
+        /// </param>
+        public FemapPostProcessor(
+            Func<IFemapSession> sessionFactory,
+            FemapApiNames? api = null,
+            bool startNewModel = false)
         {
             _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
             _api = api ?? new FemapApiNames();
+            _startNewModel = startNewModel;
         }
 
         /// <param name="deckPath">The Nastran deck MYSTRAN solved. Read first, to build the mesh.</param>
@@ -93,6 +108,12 @@ namespace DWM.Shared.Tooling.Fea
 
                 // Visibility is cosmetic; a FEMAP that will not show itself still imported.
                 try { session.Invoke(_api.SetVisible, true); } catch (Exception) { }
+
+                if (_startNewModel)
+                {
+                    var cleared = TryShapes(session, _api.NewModel, string.Empty, "start a new model");
+                    warnings.Add($"FEMAP was cleared to an empty model first ({cleared}).");
+                }
 
                 // Order is not optional: results have nowhere to land until the model exists.
                 var modelShape = TryShapes(session, _api.ReadNastranModel, deckPath, "read the model");
