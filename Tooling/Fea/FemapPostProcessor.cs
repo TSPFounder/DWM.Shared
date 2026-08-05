@@ -95,6 +95,7 @@ namespace DWM.Shared.Tooling.Fea
                     "would be nothing to post-process.");
 
             var attached = false;
+            var acceptedVia = FemapComSession.DefaultProgId;
 
             try
             {
@@ -127,10 +128,17 @@ namespace DWM.Shared.Tooling.Fea
                     try { session.Invoke(refresh); } catch (Exception) { }
                 }
 
-                warnings.Add($"FEMAP accepted: {modelShape} and {resultsShape}. " +
-                             "If these are the shapes that work on this FEMAP, they can be " +
-                             "promoted to the only candidates -- the list exists because the " +
-                             "API reference has not been read, not because variety is wanted.");
+                // RECORDED AS ResolvedVia, NOT AS A WARNING, and the distinction cost a test
+                // to notice. As a warning it fired on EVERY successful load, so every run came
+                // back SucceededWithWarnings -- and a channel that triggers every single time
+                // carries no information. That is the run-history bug inverted: there, warnings
+                // existed and could not be read; here they could be read and meant nothing.
+                // Both end with nobody looking.
+                //
+                // ResolvedVia is where this belonged. The field answers "how did this actually
+                // get done", which is precisely what an accepted call shape is, and the run
+                // history already renders it.
+                acceptedVia = $"{FemapComSession.DefaultProgId} via {modelShape} + {resultsShape}";
 
                 if (!attached)
                     warnings.Add(
@@ -152,7 +160,7 @@ namespace DWM.Shared.Tooling.Fea
                     // every time and mean nothing when it passed.
                     expectedOutputs: Array.Empty<string>(),
                     warnings: warnings,
-                    resolvedVia: FemapComSession.DefaultProgId),
+                    resolvedVia: acceptedVia),
                 AttachedToExistingFemap = attached,
                 DeckPath = deckPath,
                 ResultsPath = resultsPath
