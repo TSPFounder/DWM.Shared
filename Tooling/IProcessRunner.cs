@@ -83,7 +83,26 @@ namespace DWM.Shared.Tooling
                 if (e.Data is null) stderrDone.Set(); else stderr.AppendLine(e.Data);
             };
 
-            process.Start();
+            try
+            {
+                process.Start();
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                // "The system cannot find the file specified", almost always. Returned rather
+                // than thrown because a missing solver is an ORDINARY outcome of asking a tool
+                // to run, not an exceptional one -- and letting it propagate meant it surfaced
+                // as an unhandled Win32Exception in the debugger instead of a message in the
+                // window that asked for the run.
+                return new ProcessOutcome
+                {
+                    ExitCode = -1,
+                    StandardError =
+                        $"Could not start '{request.ExecutablePath}': {ex.Message}",
+                    Duration = stopwatch.Elapsed
+                };
+            }
+
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
@@ -119,21 +138,94 @@ namespace DWM.Shared.Tooling
         }
 
         /// <summary>
-        /// First candidate that exists on disk, or a bare filename if one is expected to be on
-        /// PATH. Returns null when nothing matches.
+        /// Where the executable actually is, or null.
+        ///
+        /// NULL MEANS NOT FOUND, and that promise is the point. An earlier version returned a
+        /// bare filename unchecked on the theory that it might be on PATH -- so "resolved"
+        /// could mean "guessed", ToolAvailability said Found when nothing had been found, and
+        /// the failure arrived later as a Win32Exception from Process.Start. A tool that
+        /// reports Found and then cannot start is worse than one that reports NotFound.
+        ///
+        /// Three passes, in order: rooted candidates, PATH for bare names, then a bounded
+        /// search under the descriptor's search roots -- because installers vary on whether
+        /// the binary sits at the root or under bin/, and a version-stamped subfolder is
+        /// common enough to be worth looking for rather than making the user configure.
         /// </summary>
         public static string? ResolveExecutable(ToolDescriptor descriptor)
         {
             foreach (var candidate in descriptor.ExecutableCandidates)
             {
                 if (string.IsNullOrWhiteSpace(candidate)) continue;
-
-                // A bare filename means "expect it on PATH" -- it cannot be existence-checked
-                // here without reimplementing PATH lookup, so it is accepted as a last resort
-                // and allowed to fail at spawn time with the OS's own message.
-                if (!Path.IsPathRooted(candidate)) return candidate;
-                if (File.Exists(candidate)) return candidate;
+                if (Path.IsPathRooted(candidate) && File.Exists(candidate)) return candidate;
             }
+
+            foreach (var candidate in descriptor.ExecutableCandidates)
+            {
+                if (string.IsNullOrWhiteSpace(candidate) || Path.IsPathRooted(candidate)) continue;
+
+                var onPath = FindOnPath(candidate);
+                if (onPath is not null) return onPath;
+            }
+
+            foreach (var root in descriptor.ExecutableSearchRoots)
+            {
+                foreach (var candidate in descriptor.ExecutableCandidates)
+                {
+                    var name = Path.GetFileName(candidate);
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+
+                    var found = SearchUnder(root, name, depth: 3);
+                    if (found is not null) return found;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? FindOnPath(string fileName)
+        {
+            var path = Environment.GetEnvironmentVariable("PATH");
+            if (string.IsNullOrEmpty(path)) return null;
+
+            foreach (var directory in path.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(directory)) continue;
+                try
+                {
+                    var full = Path.Combine(directory.Trim(), fileName);
+                    if (File.Exists(full)) return full;
+                }
+                catch (ArgumentException)
+                {
+                    // A malformed PATH entry is somebody else's problem and must not stop the
+                    // search at the entry before the one that would have matched.
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Breadth-limited hunt under an install root. Depth-capped so a mistyped root pointing
+        /// at a drive letter cannot turn tool detection into a full disk scan.
+        /// </summary>
+        private static string? SearchUnder(string root, string fileName, int depth)
+        {
+            if (depth < 0 || string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return null;
+
+            try
+            {
+                var here = Path.Combine(root, fileName);
+                if (File.Exists(here)) return here;
+
+                foreach (var sub in Directory.EnumerateDirectories(root))
+                {
+                    var found = SearchUnder(sub, fileName, depth - 1);
+                    if (found is not null) return found;
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
+
             return null;
         }
     }

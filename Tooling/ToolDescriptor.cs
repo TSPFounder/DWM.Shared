@@ -37,6 +37,14 @@ namespace DWM.Shared.Tooling
         /// </summary>
         public IReadOnlyList<string> ExecutableCandidates { get; init; } = Array.Empty<string>();
 
+        /// <summary>
+        /// Install roots to search when no candidate path matched, e.g. C:\Mystran. Searched
+        /// a few levels deep because installers disagree about whether the binary sits at the
+        /// root, under bin/, or in a version-stamped subfolder -- and making the user hunt for
+        /// their own install path is a poor substitute for looking.
+        /// </summary>
+        public IReadOnlyList<string> ExecutableSearchRoots { get; init; } = Array.Empty<string>();
+
         /// <summary>Localhost ping endpoint for <see cref="ToolKind.InteractiveHttp"/>.</summary>
         public string? HttpPingUrl { get; init; }
 
