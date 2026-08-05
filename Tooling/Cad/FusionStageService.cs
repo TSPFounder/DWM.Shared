@@ -40,8 +40,35 @@ namespace DWM.Shared.Tooling.Cad
         /// <summary>Centre of mass, metres, in the document's coordinate system.</summary>
         public double[] CentreOfMass { get; init; } = Array.Empty<double>();
 
-        /// <summary>Ixx Iyy Izz Ixy Iyz Ixz, kg*m^2, when the add-in supplies them.</summary>
+        /// <summary>
+        /// Moments of inertia as the add-in returned them, UNCONVERTED.
+        ///
+        /// Fusion's internal length unit is the centimetre, so these are believed to be
+        /// kg*cm^2 -- but that has not been checked against a hand-computed solid, and
+        /// silently applying a factor that might be wrong is worse than handing over raw
+        /// numbers with a label. Nothing in this service makes a decision from them.
+        /// </summary>
         public double[] Inertia { get; init; } = Array.Empty<double>();
+
+        /// <summary>
+        /// How many bodies the component holds, when the add-in says.
+        ///
+        /// LOAD-BEARING FOR THE ZERO-MASS CHECK. An assembly component that holds only
+        /// sub-components has no bodies and therefore no mass of its own -- that is correct,
+        /// not a fault. A component WITH bodies reporting zero mass is the Inactive
+        /// (Read-Only) failure. Without this the two are the same number and refusing both
+        /// would reject healthy models.
+        ///
+        /// Null when the add-in did not report it, which is treated as "assume it has
+        /// bodies" -- the cautious direction, since the alternative is letting a real zero
+        /// through on a missing field.
+        /// </summary>
+        public int? BodyCount { get; init; }
+
+        /// <summary>
+        /// Zero mass that cannot be explained by the component being empty.
+        /// </summary>
+        public bool IsSuspiciouslyMassless => MassKg <= 0 && (BodyCount is null or > 0);
 
         public override string ToString() => $"{ComponentName}: {MassKg:G6} kg";
     }
@@ -116,7 +143,7 @@ namespace DWM.Shared.Tooling.Cad
                 // THE ZERO-MASS REFUSAL. See the file header: an Inactive (Read-Only)
                 // component can report 0 rather than raising, and zero mass reaching a
                 // Simulink model produces a simulation that runs and means nothing.
-                var weightless = components.Where(c => c.MassKg <= 0).ToList();
+                var weightless = components.Where(c => c.IsSuspiciouslyMassless).ToList();
                 if (weightless.Count > 0)
                     return Failed(stageId, startedUtc,
                         $"{weightless.Count} component(s) reported ZERO OR NEGATIVE MASS: " +
@@ -195,7 +222,11 @@ namespace DWM.Shared.Tooling.Cad
                     ComponentName = name,
                     MassKg = m.GetDouble(),
                     CentreOfMass = Numbers(item, "centreOfMass", "centerOfMass", "com"),
-                    Inertia = Numbers(item, "inertia", "momentsOfInertia")
+                    Inertia = Numbers(item, "inertia", "momentsOfInertia"),
+                    BodyCount = item.TryGetProperty("bodyCount", out var bc)
+                                && bc.ValueKind == JsonValueKind.Number
+                        ? bc.GetInt32()
+                        : null
                 });
             }
 
