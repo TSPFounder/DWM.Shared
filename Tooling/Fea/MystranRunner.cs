@@ -26,6 +26,16 @@ namespace DWM.Shared.Tooling.Fea
         /// <summary>Full path of the .f06 print file, whether or not it parsed.</summary>
         public string? F06Path { get; init; }
 
+        /// <summary>The .ERR log, when MYSTRAN wrote one. Not the same content as the .f06.</summary>
+        public string? ErrPath { get; init; }
+
+        /// <summary>
+        /// The .op2 results file, when present. What FEMAP reads to show mode shapes -- but
+        /// note it carries RESULTS ONLY: this run's OP2 contains six OUGV1 eigenvector blocks
+        /// and no GEOM datablocks, so FEMAP needs the model imported from the deck first.
+        /// </summary>
+        public string? Op2Path { get; init; }
+
         public string? ExecutableUsed { get; init; }
         public int ExitCode { get; init; }
         public bool TimedOut { get; init; }
@@ -71,8 +81,10 @@ namespace DWM.Shared.Tooling.Fea
             // launched session started in a read-only install directory.
             var workingDirectory = Path.GetDirectoryName(Path.GetFullPath(deckPath))!;
             var deckName = Path.GetFileName(deckPath);
-            var f06Path = Path.Combine(workingDirectory,
-                Path.GetFileNameWithoutExtension(deckPath) + ".f06");
+            var stem = Path.GetFileNameWithoutExtension(deckPath);
+            var f06Path = Path.Combine(workingDirectory, stem + ".f06");
+            var errPath = Path.Combine(workingDirectory, stem + ".ERR");
+            var op2Path = Path.Combine(workingDirectory, stem + ".OP2");
 
             var startedUtc = DateTime.UtcNow;
 
@@ -125,6 +137,30 @@ namespace DWM.Shared.Tooling.Fea
             {
                 modal = NastranF06Parser.Parse(File.ReadAllText(f06Path));
 
+                // THE .ERR IS A DIFFERENT FILE WITH DIFFERENT CONTENT, and reading only the
+                // .f06 loses things worth having. The 2026-08-03 tower run wrote a clean .f06
+                // -- no warnings at all -- while its .ERR carried
+                //
+                //   *WARNING: THE L-SET MASS MATRIX HAS ONLY 30 NONZEROS ON ITS DIAGONAL.
+                //             THERE ARE NO MORE FINITE EIGENVALUES BEYOND THIS NUMBER
+                //
+                // which is a real statement about what the model can and cannot tell you. A
+                // runner reporting "0 warnings" while that sat unread on disk would be giving
+                // a cleaner account of the solve than the solver did.
+                if (File.Exists(errPath))
+                {
+                    var err = NastranF06Parser.Parse(File.ReadAllText(errPath));
+
+                    foreach (var warning in err.WarningMessages.Take(10))
+                        if (!modal.WarningMessages.Contains(warning))
+                            warnings.Add(warning);
+
+                    // A FATAL in the .ERR counts even when the .f06 looks clean.
+                    if (err.HasFatal && !modal.HasFatal)
+                        failure = "MYSTRAN reported a FATAL in the .ERR log:\n  " +
+                                  string.Join("\n  ", err.FatalMessages.Take(5));
+                }
+
                 // THE EXIT CODE IS CHECKED SECOND, AND ON PURPOSE. Solvers in this lineage
                 // return 0 after writing FATAL and producing nothing, so trusting the status
                 // yields a confident wrong answer. The print file is the authority.
@@ -161,6 +197,8 @@ namespace DWM.Shared.Tooling.Fea
                 Run = run,
                 Modal = modal,
                 F06Path = f06Path,
+                ErrPath = File.Exists(errPath) ? errPath : null,
+                Op2Path = File.Exists(op2Path) ? op2Path : null,
                 ExecutableUsed = executable,
                 ExitCode = outcome.ExitCode
             };
