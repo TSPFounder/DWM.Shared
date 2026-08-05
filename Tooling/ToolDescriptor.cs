@@ -45,6 +45,17 @@ namespace DWM.Shared.Tooling
         /// </summary>
         public IReadOnlyList<string> ExecutableSearchRoots { get; init; } = Array.Empty<string>();
 
+        /// <summary>
+        /// Glob patterns to match under <see cref="ExecutableSearchRoots"/>, e.g. "mystran*.exe".
+        ///
+        /// PATTERNS RATHER THAN NAMES because a versioned filename is the norm, not the
+        /// exception: MYSTRAN 19 ships as mystran-19.0.0-windows-x86_64.exe. Searching for an
+        /// exact "mystran.exe" found nothing on a machine where MYSTRAN was plainly installed,
+        /// and pinning the versioned name instead would just move the breakage to the next
+        /// upgrade. Falls back to the candidate filenames when empty.
+        /// </summary>
+        public IReadOnlyList<string> ExecutableSearchPatterns { get; init; } = Array.Empty<string>();
+
         /// <summary>Localhost ping endpoint for <see cref="ToolKind.InteractiveHttp"/>.</summary>
         public string? HttpPingUrl { get; init; }
 

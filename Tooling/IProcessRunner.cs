@@ -9,6 +9,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 
@@ -167,14 +168,19 @@ namespace DWM.Shared.Tooling
                 if (onPath is not null) return onPath;
             }
 
+            var patterns = descriptor.ExecutableSearchPatterns.Count > 0
+                ? descriptor.ExecutableSearchPatterns
+                : descriptor.ExecutableCandidates
+                    .Select(Path.GetFileName)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Select(n => n!)
+                    .ToList();
+
             foreach (var root in descriptor.ExecutableSearchRoots)
             {
-                foreach (var candidate in descriptor.ExecutableCandidates)
+                foreach (var pattern in patterns)
                 {
-                    var name = Path.GetFileName(candidate);
-                    if (string.IsNullOrWhiteSpace(name)) continue;
-
-                    var found = SearchUnder(root, name, depth: 3);
+                    var found = SearchUnder(root, pattern, depth: 3);
                     if (found is not null) return found;
                 }
             }
@@ -208,18 +214,24 @@ namespace DWM.Shared.Tooling
         /// Breadth-limited hunt under an install root. Depth-capped so a mistyped root pointing
         /// at a drive letter cannot turn tool detection into a full disk scan.
         /// </summary>
-        private static string? SearchUnder(string root, string fileName, int depth)
+        private static string? SearchUnder(string root, string pattern, int depth)
         {
             if (depth < 0 || string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return null;
 
             try
             {
-                var here = Path.Combine(root, fileName);
-                if (File.Exists(here)) return here;
+                // ORDERED, because EnumerateFiles gives no guaranteed order and an install with
+                // two versions side by side would otherwise resolve to whichever the filesystem
+                // happened to hand back first -- a different answer on different machines, or
+                // on the same machine after a defrag.
+                var match = Directory.EnumerateFiles(root, pattern)
+                                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                                     .FirstOrDefault();
+                if (match is not null) return match;
 
                 foreach (var sub in Directory.EnumerateDirectories(root))
                 {
-                    var found = SearchUnder(sub, fileName, depth - 1);
+                    var found = SearchUnder(sub, pattern, depth - 1);
                     if (found is not null) return found;
                 }
             }
