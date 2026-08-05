@@ -177,6 +177,17 @@ namespace DWM.Shared.Tooling.Fea
                     // than interpreted: a wrong guess about which value means success would
                     // be worse than showing the number and letting a human judge it.
                     var status = session.Invoke(shape.Method, shape.Args(path));
+
+                    // THE RETURN CODE IS NOW CHECKED, not merely reported. Until FEMAP's
+                    // success value was known this could only be shown to a human, and three
+                    // runs reported success while leaving Out: 0 because a refused call and an
+                    // accepted one are indistinguishable when nobody reads the number.
+                    if (!IsSuccess(status))
+                    {
+                        attempts.Add($"{shape.Signature} -> returned {status}, not {FemapApiNames.Success}");
+                        continue;
+                    }
+
                     return $"{shape.Signature} returned {status ?? "(null)"}";
                 }
                 catch (Exception ex)
@@ -191,6 +202,19 @@ namespace DWM.Shared.Tooling.Fea
                 "The right signature is in FEMAP's API reference under the install " +
                 "(C:\\FEMAPv102). Pass a corrected FemapApiNames -- the shapes are data, so " +
                 "this needs no rebuild.");
+        }
+
+
+        /// <summary>
+        /// FEMAP returns -1 for success. A value that will not convert to a number is accepted
+        /// rather than rejected -- not every API member returns a status, and refusing an
+        /// unreadable one would turn a working call into a failure on a technicality.
+        /// </summary>
+        private static bool IsSuccess(object? status)
+        {
+            if (status is null) return true;
+            try { return Convert.ToInt64(status) == FemapApiNames.Success; }
+            catch (Exception) { return true; }
         }
 
         private static string FirstLine(string message)

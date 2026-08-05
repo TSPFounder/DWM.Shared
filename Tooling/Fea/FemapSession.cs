@@ -39,22 +39,28 @@ namespace DWM.Shared.Tooling.Fea
     }
 
     /// <summary>
-    /// How to ask FEMAP to do each job -- as an ORDERED LIST OF CANDIDATES, not one guess.
+    /// How to call FEMAP for each job. VERIFIED against FEMAP 10.2 on 2026-08-05 -- these are
+    /// the shapes that produced a model and six output sets from wtTowerModal, confirmed by
+    /// Out: 6 in FEMAP's own status bar rather than by the call not throwing.
     ///
-    /// The first real attempt got 'feFileReadNastran' failed with 1 argument(s): Type mismatch
-    /// (DISP_E_TYPEMISMATCH). That is a useful failure: the ProgID was right, the METHOD EXISTS
-    /// -- a wrong name raises MissingMethodException instead -- and only the argument shape was
-    /// wrong. Most likely it wants (setId, filename) and was handed a single string to coerce
-    /// into a number.
-    ///
-    /// Since the API reference has not been read, guessing one harder would just be the same
-    /// mistake again. Instead the shapes are tried in order until one succeeds, and the one
-    /// that worked is REPORTED -- so it can be promoted to the default with evidence rather
-    /// than another guess. Attempting is the probe; that principle has already earned its place
-    /// twice today.
+    /// They were found by trying candidates rather than by reading the reference, which was
+    /// the wrong way round and cost five round trips. The list mechanism stays because a
+    /// correction should still cost one line, but each entry is now one known-good shape
+    /// rather than a spread of guesses.
     /// </summary>
     public sealed class FemapApiNames
     {
+        /// <summary>
+        /// FEMAP's success return. It is VB TRUE, and all three verified calls returned it.
+        ///
+        /// CHECKING THIS IS THE POINT. FEMAP signals failure with a return code, not an
+        /// exception, so before this was known a refused call looked exactly like a successful
+        /// one -- which is how three runs reported success while leaving Out: 0. Same family as
+        /// MATLAB's Execute returning error text as a string and MYSTRAN exiting 0 after a
+        /// FATAL: the status is somewhere other than where a caller would naturally look.
+        /// </summary>
+        public const int Success = -1;
+
         public IReadOnlyList<FemapCallShape> ReadNastranModel { get; init; } = new[]
         {
             new FemapCallShape
@@ -62,29 +68,9 @@ namespace DWM.Shared.Tooling.Fea
                 Method = "feFileReadNastran",
                 Args = path => new object[] { 0, path },
                 Signature = "feFileReadNastran(setId, filename)"
-            },
-            new FemapCallShape
-            {
-                Method = "feFileReadNastran",
-                Args = path => new object[] { path },
-                Signature = "feFileReadNastran(filename)"
-            },
-            new FemapCallShape
-            {
-                Method = "feFileReadNastranModel",
-                Args = path => new object[] { path },
-                Signature = "feFileReadNastranModel(filename)"
             }
         };
 
-        /// <summary>
-        /// NEVER LIST THE MODEL READER HERE. An earlier version ended this list with
-        /// feFileReadNastran(setId, filename) as a last resort, which handed the .OP2 to the
-        /// MODEL importer -- so the call did not throw, TryShapes counted it as success, and
-        /// FEMAP came away with the model intact, zero output sets and "Errors have Occurred".
-        /// A fallback that succeeds by doing the wrong thing is worse than no fallback, because
-        /// it also stops the search before anything correct is tried.
-        /// </summary>
         public IReadOnlyList<FemapCallShape> ReadNastranResults { get; init; } = new[]
         {
             new FemapCallShape
@@ -92,18 +78,6 @@ namespace DWM.Shared.Tooling.Fea
                 Method = "feFileReadNastranResults",
                 Args = path => new object[] { 1, path },
                 Signature = "feFileReadNastranResults(setId, filename)"
-            },
-            new FemapCallShape
-            {
-                Method = "feFileReadNastranResults",
-                Args = path => new object[] { path },
-                Signature = "feFileReadNastranResults(filename)"
-            },
-            new FemapCallShape
-            {
-                Method = "feFileReadNastranResults2",
-                Args = path => new object[] { 1, path },
-                Signature = "feFileReadNastranResults2(setId, filename)"
             }
         };
 
@@ -111,13 +85,9 @@ namespace DWM.Shared.Tooling.Fea
         public string SetVisible { get; init; } = "feAppVisible";
 
         /// <summary>
-        /// Start an empty model, so a repeat load has somewhere clean to land.
-        ///
-        /// Needed because re-importing into a populated FEMAP does not replace -- it collides.
-        /// The 2026-08-05 second run produced "Overwriting existing Property 101..110",
-        /// "Overwriting existing Element 1..10" and a SECOND set of six output sets, leaving
-        /// twelve where there should be six. Nothing was lost, but the results view stopped
-        /// meaning one run.
+        /// Start an empty model, so a repeat load has somewhere clean to land. Without it, a
+        /// second load collides with the first: "Overwriting existing Property 101..110" and
+        /// twelve output sets where six belong.
         /// </summary>
         public IReadOnlyList<FemapCallShape> NewModel { get; init; } = new[]
         {
