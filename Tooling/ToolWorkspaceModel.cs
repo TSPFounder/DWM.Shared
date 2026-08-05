@@ -90,13 +90,22 @@ namespace DWM.Shared.Tooling
             Availability is not ToolAvailability.NotFound;
 
         /// <summary>
-        /// Run needs the tool present. NOT running -- for a batch solver "found on disk" is the
-        /// most that can ever be known before spawning it, and refusing to try would make
-        /// MYSTRAN permanently unrunnable.
+        /// Run is blocked only by a POSITIVE finding that the tool is absent.
+        ///
+        /// Not by Unknown, and that is the whole point. An interactive COM tool reports Unknown
+        /// on purpose: checking whether a COM server is registered tells you almost nothing
+        /// worth having -- not running, not licensed, and not the release the project needs --
+        /// so the honest answer before trying is "I have not looked". Treating that as "cannot
+        /// run" disabled the MATLAB button entirely and made clicking it do nothing, which is
+        /// the exact failure the WhyNot tooltips exist to prevent.
+        ///
+        /// Attempting IS the probe for these tools. Attach or launch, then report what
+        /// happened. Nor does Run require Running: for a batch solver "found on disk" is the
+        /// ceiling, so requiring more would make MYSTRAN permanently unrunnable.
         /// </summary>
         public bool CanRun =>
             Kind != ToolKind.FileOnly &&
-            Availability is not (ToolAvailability.NotFound or ToolAvailability.Unknown);
+            Availability != ToolAvailability.NotFound;
 
         public bool Can(ToolAction action) => action switch
         {
