@@ -218,7 +218,7 @@ namespace DWM.Shared.Tooling
         {
             ToolRegistry.Matlab => "Open wtGui in MATLAB",
             ToolRegistry.Mystran => "Solve deck",
-            ToolRegistry.Femap => "Open in FEMAP",
+            ToolRegistry.Femap => "Load results in FEMAP",
             _ => "Run"
         };
 
