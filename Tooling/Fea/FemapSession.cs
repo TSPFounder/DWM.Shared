@@ -19,28 +19,87 @@
 // FEMAP open for the user must Detach().
 
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace DWM.Shared.Tooling.Fea
 {
+    /// <summary>One way of calling FEMAP for a given job: a method name and an argument shape.</summary>
+    public sealed class FemapCallShape
+    {
+        public string Method { get; init; } = string.Empty;
+
+        /// <summary>Builds the argument list from the file path.</summary>
+        public Func<string, object[]> Args { get; init; } = path => new object[] { path };
+
+        /// <summary>Shown when this shape is the one that worked, so it can become the default.</summary>
+        public string Signature { get; init; } = string.Empty;
+    }
+
     /// <summary>
-    /// FEMAP API method names. UNVERIFIED against FEMAP 10.2 -- see the file header. Override
-    /// any that turn out wrong rather than editing call sites.
+    /// How to ask FEMAP to do each job -- as an ORDERED LIST OF CANDIDATES, not one guess.
+    ///
+    /// The first real attempt got 'feFileReadNastran' failed with 1 argument(s): Type mismatch
+    /// (DISP_E_TYPEMISMATCH). That is a useful failure: the ProgID was right, the METHOD EXISTS
+    /// -- a wrong name raises MissingMethodException instead -- and only the argument shape was
+    /// wrong. Most likely it wants (setId, filename) and was handed a single string to coerce
+    /// into a number.
+    ///
+    /// Since the API reference has not been read, guessing one harder would just be the same
+    /// mistake again. Instead the shapes are tried in order until one succeeds, and the one
+    /// that worked is REPORTED -- so it can be promoted to the default with evidence rather
+    /// than another guess. Attempting is the probe; that principle has already earned its place
+    /// twice today.
     /// </summary>
     public sealed class FemapApiNames
     {
-        /// <summary>Read a Nastran input deck as a model. Args: (filename).</summary>
-        public string ReadNastranModel { get; init; } = "feFileReadNastran";
+        public IReadOnlyList<FemapCallShape> ReadNastranModel { get; init; } = new[]
+        {
+            new FemapCallShape
+            {
+                Method = "feFileReadNastran",
+                Args = path => new object[] { 0, path },
+                Signature = "feFileReadNastran(setId, filename)"
+            },
+            new FemapCallShape
+            {
+                Method = "feFileReadNastran",
+                Args = path => new object[] { path },
+                Signature = "feFileReadNastran(filename)"
+            },
+            new FemapCallShape
+            {
+                Method = "feFileReadNastranModel",
+                Args = path => new object[] { path },
+                Signature = "feFileReadNastranModel(filename)"
+            }
+        };
 
-        /// <summary>Read Nastran results onto the open model. Args: (setId, filename).</summary>
-        public string ReadNastranResults { get; init; } = "feFileReadNastranResults";
+        public IReadOnlyList<FemapCallShape> ReadNastranResults { get; init; } = new[]
+        {
+            new FemapCallShape
+            {
+                Method = "feFileReadNastranResults",
+                Args = path => new object[] { 1, path },
+                Signature = "feFileReadNastranResults(setId, filename)"
+            },
+            new FemapCallShape
+            {
+                Method = "feFileReadNastranResults",
+                Args = path => new object[] { path },
+                Signature = "feFileReadNastranResults(filename)"
+            },
+            new FemapCallShape
+            {
+                Method = "feFileReadNastran",
+                Args = path => new object[] { 1, path },
+                Signature = "feFileReadNastran(setId, filename) -- if this one reads RESULTS"
+            }
+        };
 
-        /// <summary>Read a FEMAP Neutral file. Args: (version, filename).</summary>
-        public string ReadNeutral { get; init; } = "feFileReadNeutral";
-
-        /// <summary>Show the FEMAP window. Args: (visible).</summary>
+        /// <summary>Show the FEMAP window. Failure here is not fatal.</summary>
         public string SetVisible { get; init; } = "feAppVisible";
     }
 
