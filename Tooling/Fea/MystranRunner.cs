@@ -105,7 +105,16 @@ namespace DWM.Shared.Tooling.Fea
             string? failure = null;
             var warnings = new List<string>();
 
-            if (!File.Exists(f06Path))
+            // A spawn that never happened is not "the solver produced no output" -- saying so
+            // would send someone looking at their deck for a problem that is in the toolchain.
+            if (outcome.ExitCode == -1 && outcome.StandardError.StartsWith("Could not start", StringComparison.Ordinal))
+            {
+                failure = outcome.StandardError +
+                    "\n\nMYSTRAN was located at this path, but starting it failed. If the file " +
+                    "has been moved or renamed since, override the descriptor's " +
+                    "ExecutableCandidates or ExecutableSearchRoots.";
+            }
+            else if (!File.Exists(f06Path))
             {
                 failure =
                     $"MYSTRAN exited with code {outcome.ExitCode} but wrote no print file.\n\n" +

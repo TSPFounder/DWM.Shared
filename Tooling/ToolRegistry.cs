@@ -144,6 +144,7 @@ namespace DWM.Shared.Tooling
                 // to launch it, and because an install whose COM server is not registered would
                 // otherwise report NotFound while plainly being installed.
                 ExecutableCandidates = new[] { @"C:\FEMAPv102\femap.exe" },
+                ExecutableSearchRoots = new[] { @"C:\FEMAPv102" },
                 ArtifactExtensions = new[] { ".modfem", ".neu" },
                 ResultExtensions = new[] { ".bdf", ".dat" },
                 KnownLimitation =
@@ -164,6 +165,9 @@ namespace DWM.Shared.Tooling
                     @"C:\Mystran\Mystran.exe",
                     "mystran.exe"          // on PATH
                 },
+                // Confirmed install root, 2026-08-03. Searched because none of the exact
+                // paths above matched on the machine that has it installed there.
+                ExecutableSearchRoots = new[] { @"C:\Mystran", @"C:\MYSTRAN" },
                 ArtifactExtensions = new[] { ".bdf", ".dat", ".nas" },
                 ResultExtensions = new[] { ".f06", ".op2", ".neu" },
                 KnownLimitation =
