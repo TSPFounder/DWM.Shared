@@ -85,18 +85,30 @@ namespace DWM.Shared.Tooling
         /// express. FEMAP meshes and writes the deck, MYSTRAN solves it, FEMAP reads it back --
         /// so structural work is two stages sharing one artifact chain, not one box to tick.
         /// </summary>
-        public static ProjectPipeline WithStructuralAnalysis()
+        /// <param name="deckPath">
+        /// The Nastran deck both FEA stages work on. FEMAP writes it, MYSTRAN reads it, and
+        /// FEMAP reads the results back -- ONE FILE IS THE HANDOFF, which is why both stages
+        /// name the same path rather than each having its own.
+        ///
+        /// May be ABSOLUTE, and usually is: a deck normally lives with the FEA work rather
+        /// than under the Simulink model that happens to be the project root. Path.Combine
+        /// returns a rooted second argument unchanged, so no special case is needed here.
+        /// Null falls back to "fea/model.bdf" relative to the project root.
+        /// </param>
+        public static ProjectPipeline WithStructuralAnalysis(string? deckPath = null)
         {
+            var deck = string.IsNullOrWhiteSpace(deckPath) ? "fea/model.bdf" : deckPath!;
+
             var pipeline = Default();
             pipeline.InsertAfter("matlab", new PipelineStageDefinition
             {
                 Id = "fea-mesh", Label = "FEA Mesh", ToolId = ToolRegistry.Femap,
-                ArtifactPath = "fea/model.bdf", IsOptional = true
+                ArtifactPath = deck, IsOptional = true
             });
             pipeline.InsertAfter("fea-mesh", new PipelineStageDefinition
             {
                 Id = "fea-solve", Label = "FEA Solve", ToolId = ToolRegistry.Mystran,
-                ArtifactPath = "fea/model.bdf", IsOptional = true
+                ArtifactPath = deck, IsOptional = true
             });
             return pipeline;
         }
