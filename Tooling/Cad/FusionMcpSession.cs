@@ -17,11 +17,16 @@
 //
 // WHAT IS UNVERIFIED HERE, STATED PLAINLY
 //
-// The tool NAMES Autodesk's server exposes have not been read, and neither has the command
-// that launches it standalone. Both are DATA in FusionMcpOptions for the same reason
-// FemapApiNames was: being wrong should cost one object, not a rebuild. It is also entirely
-// possible that the server is only launchable by Claude Desktop, in which case this transport
-// is unusable and the bridge is the answer -- that is a question for the machine that has it.
+// The tool NAMES Autodesk's server exposes have not been read. They are DATA in
+// FusionMcpOptions for the same reason FemapApiNames was: being wrong should cost one object,
+// not a rebuild. ListToolsAsync is the honest way to correct them.
+//
+// THE TRANSPORT WAS GUESSED WRONG ONCE, AND THE EVIDENCE WAS ON SCREEN. This was first built
+// for stdio -- launch the server, talk over its pipes -- on the assumption that a local MCP
+// server has to be started. Fusion's own Text Commands panel was printing
+// "MCP - http://127.0.0.1:65517/mcp" the whole time, and netstat confirmed it LISTENING on
+// 2026-08-05. The server is already running and speaks streamable HTTP, so HttpJsonRpcChannel
+// is the default and the stdio channel is kept only for a server that is not already up.
 //
 // THE MCP TRAP, WHICH IS THIS PROJECT'S OLDEST BUG IN A NEW COAT
 //
@@ -62,7 +67,20 @@ namespace DWM.Shared.Tooling.Cad
     /// </summary>
     public sealed class FusionMcpOptions
     {
-        /// <summary>Executable that speaks MCP on stdio. Empty means "not configured".</summary>
+        /// <summary>
+        /// The server's HTTP endpoint. THE DEFAULT IS VERIFIED, not guessed: Fusion's Text
+        /// Commands panel prints "MCP - http://127.0.0.1:65517/mcp", and netstat confirmed
+        /// 127.0.0.1:65517 LISTENING on 2026-08-05.
+        ///
+        /// Preferred over ServerCommand because the server is ALREADY RUNNING -- DWMStudio
+        /// launches nothing, owns no child process, and cannot orphan one.
+        /// </summary>
+        public Uri? ServerUrl { get; init; } = new("http://127.0.0.1:65517/mcp");
+
+        /// <summary>
+        /// Executable that speaks MCP on stdio, for a server that is not already listening.
+        /// Empty means "not configured"; ServerUrl wins when both are set.
+        /// </summary>
         public string ServerCommand { get; init; } = string.Empty;
 
         public IReadOnlyList<string> ServerArguments { get; init; } = Array.Empty<string>();
@@ -277,20 +295,25 @@ namespace DWM.Shared.Tooling.Cad
 
                 case FusionTransport.Mcp:
                     var options = mcp ?? new FusionMcpOptions();
-                    if (channelFactory is null && string.IsNullOrWhiteSpace(options.ServerCommand))
-                    {
-                        throw new InvalidOperationException(
-                            "The MCP transport needs either a ServerCommand to launch or a " +
-                            "channel factory. Neither was supplied.\n\n" +
-                            "If Autodesk's Fusion server cannot be started outside Claude " +
-                            "Desktop, use FusionTransport.Bridge -- DWMStudio has to be able " +
-                            "to start its own transport.");
-                    }
-                    return () => new FusionMcpSession(
-                        channelFactory is null
-                            ? new StdioJsonRpcChannel(options)
-                            : channelFactory(options),
-                        options);
+
+                    if (channelFactory is not null)
+                        return () => new FusionMcpSession(channelFactory(options), options);
+
+                    // HTTP FIRST. Autodesk's server is already listening, so connecting beats
+                    // launching: nothing to start, nothing to own, nothing to leave behind.
+                    if (options.ServerUrl is not null)
+                        return () => new FusionMcpSession(
+                            new HttpJsonRpcChannel(options.ServerUrl), options);
+
+                    if (!string.IsNullOrWhiteSpace(options.ServerCommand))
+                        return () => new FusionMcpSession(new StdioJsonRpcChannel(options), options);
+
+                    throw new InvalidOperationException(
+                        "The MCP transport needs a ServerUrl to connect to, a ServerCommand to " +
+                        "launch, or a channel factory. None was supplied.\n\n" +
+                        "Fusion prints its endpoint in the Text Commands panel as " +
+                        "\"MCP - http://127.0.0.1:<port>/mcp\". If no server is running, use " +
+                        "FusionTransport.Bridge instead.");
 
                 default:
                     throw new ArgumentOutOfRangeException(nameof(transport));
