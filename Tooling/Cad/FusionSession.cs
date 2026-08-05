@@ -15,13 +15,33 @@
 //
 // THE PROTOCOL HERE IS UNVERIFIED, AND IS THEREFORE DATA.
 //
-// There is existing Fusion Python for this project at
-// DWM_Dev\Models\Fusion\MVP_WindTurbine, which this code has never been able to read --
-// that repository is not reachable from the environment this was written in. So every path,
-// field name and command below is a GUESS, and FusionProtocol exists so that correcting them
-// is one object at a call site rather than an edit through this file. That is the same shape
-// FemapApiNames took for the same reason, and it was right: the FEMAP names were wrong on
+// Every path, field name and command below is a GUESS. FusionProtocol exists so correcting
+// them is one object at a call site rather than an edit through this file -- the same shape
+// FemapApiNames took, for the same reason, and it was right: the FEMAP names were wrong on
 // first contact and cost one line to fix.
+//
+// WHAT THE EXISTING FUSION PYTHON ACTUALLY IS (read 2026-08-05)
+//
+// WindTurbineBlade.py is a GENERATIVE SCRIPT, not a server. It builds the rotor from the BOM
+// and is run by hand from Fusion's Scripts and Add-Ins dialog. There is no HTTP surface to
+// talk to, so nothing below is wrong so much as PREMATURE -- the bridge add-in still has to
+// be written, and its job is to invoke that script rather than to reimplement it.
+//
+// It is well built for that: the adsk imports are guarded, so the pure-geometry half runs
+// under an ordinary interpreter and verify_blade_geometry.py exercises 26 checks against it
+// with no Fusion at all. That is the same split as DWM.Shared against DWMStudio, arrived at
+// independently.
+//
+// THREE THINGS IN THAT SCRIPT BLOCK AUTOMATION, and they are why the default command below
+// is "build" rather than something finer-grained:
+//
+//   1. It ends in ui.messageBox(...), which is MODAL. Any caller that is not a human clicking
+//      OK waits forever. This is the likeliest cause of the timeout message further down.
+//   2. It calls documents.add() on every run, so each build leaves another open document.
+//      Fusion's free tier caps active documents at 10 -- see the note in FusionStageService
+//      about what happens to mass properties past that point. A build loop reaches it.
+//   3. Its log is assembled for a message box rather than returned, so a bridge has nothing
+//      to hand back but "it did not throw".
 //
 // ONE THING THE TRANSPORT CANNOT TELL YOU, stated here because it will look like a bug.
 // A closed Fusion and a running Fusion without the add-in loaded are INDISTINGUISHABLE from
@@ -94,10 +114,15 @@ namespace DWM.Shared.Tooling.Cad
 
         /// <summary>
         /// Command names. Guesses. The add-in decides these, not this file.
+        ///
+        /// "build" is first because the existing Python is a GENERATIVE script: the unit of
+        /// work for this project is "construct the rotor from CONFIG", not "query whatever
+        /// document happens to be open". Mass properties are what comes after a build, not
+        /// instead of one.
         /// </summary>
+        public string BuildCommand { get; init; } = "build";
         public string MassPropertiesCommand { get; init; } = "massProperties";
         public string ExportCommand { get; init; } = "export";
-        public string RunScriptCommand { get; init; } = "runScript";
     }
 
     public interface IFusionSession : IDisposable
