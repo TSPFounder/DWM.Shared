@@ -148,8 +148,15 @@ namespace DWM.Shared.Tooling.Fea
             {
                 try
                 {
-                    session.Invoke(shape.Method, shape.Args(path));
-                    return shape.Signature;
+                    // THE RETURN VALUE IS REPORTED, NOT IGNORED. FEMAP's API signals failure
+                    // with a status code rather than an exception, so a call that "worked"
+                    // may have declined to do anything -- the same shape as MATLAB's Execute
+                    // returning error text as a string and MYSTRAN exiting 0 after a FATAL.
+                    // The convention is not documented here, so the code is surfaced rather
+                    // than interpreted: a wrong guess about which value means success would
+                    // be worse than showing the number and letting a human judge it.
+                    var status = session.Invoke(shape.Method, shape.Args(path));
+                    return $"{shape.Signature} returned {status ?? "(null)"}";
                 }
                 catch (Exception ex)
                 {
