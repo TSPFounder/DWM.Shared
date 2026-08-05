@@ -49,6 +49,12 @@ namespace DWM.Shared.Projects
         public string? SimulinkModelPath { get; set; }
 
         /// <summary>
+        /// The Nastran deck the FEA stages share. Persisted per project because it is
+        /// normally an absolute path outside the project root, so it cannot be derived.
+        /// </summary>
+        public string? FeaDeckPath { get; set; }
+
+        /// <summary>
         /// Which release of a tool this project expects, keyed by ToolRegistry id --
         /// e.g. "matlab" -> "Matlab.Application.7.12".
         ///
