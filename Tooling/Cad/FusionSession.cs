@@ -13,35 +13,25 @@
 // be written, installed under
 // %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\, and set to run on startup.
 //
-// THE PROTOCOL HERE IS UNVERIFIED, AND IS THEREFORE DATA.
+// THE ADD-IN ALREADY EXISTS, AND THIS IS PINNED TO IT.
 //
-// Every path, field name and command below is a GUESS. FusionProtocol exists so correcting
-// them is one object at a call site rather than an edit through this file -- the same shape
-// FemapApiNames took, for the same reason, and it was right: the FEMAP names were wrong on
-// first contact and cost one line to fix.
+// TSPFounder/DWM-Fusion-AddIn v0.2.0, installed at
+// %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\DWM_FusionAddIn\. It listens on
+// 127.0.0.1:18750 and marshals every request onto Fusion's main thread with a custom event,
+// because the Fusion API is not thread-safe and an HTTP handler is on the wrong thread.
 //
-// WHAT THE EXISTING FUSION PYTHON ACTUALLY IS (read 2026-08-05)
+// This file was first written against a GUESSED protocol, and a second bridge was written to
+// serve it. Both were wrong to exist: the add-in was already installed, already on that port,
+// and already correct about the threading. Two servers on 18750 would have meant one silently
+// failing to bind and intermittent "nothing answered" that reads like the marshalling bug.
+// The duplicate is deleted; the contract below is read from the add-in's source.
 //
-// WindTurbineBlade.py is a GENERATIVE SCRIPT, not a server. It builds the rotor from the BOM
-// and is run by hand from Fusion's Scripts and Add-Ins dialog. There is no HTTP surface to
-// talk to, so nothing below is wrong so much as PREMATURE -- the bridge add-in still has to
-// be written, and its job is to invoke that script rather than to reimplement it.
+// Still DATA rather than literals, for a reason that has not changed: the add-in is versioned,
+// its contract is labelled v1, and v2 should cost one object here rather than an edit through
+// this file.
 //
-// It is well built for that: the adsk imports are guarded, so the pure-geometry half runs
-// under an ordinary interpreter and verify_blade_geometry.py exercises 26 checks against it
-// with no Fusion at all. That is the same split as DWM.Shared against DWMStudio, arrived at
-// independently.
-//
-// THREE THINGS IN THAT SCRIPT BLOCK AUTOMATION, and they are why the default command below
-// is "build" rather than something finer-grained:
-//
-//   1. It ends in ui.messageBox(...), which is MODAL. Any caller that is not a human clicking
-//      OK waits forever. This is the likeliest cause of the timeout message further down.
-//   2. It calls documents.add() on every run, so each build leaves another open document.
-//      Fusion's free tier caps active documents at 10 -- see the note in FusionStageService
-//      about what happens to mass properties past that point. A build loop reaches it.
-//   3. Its log is assembled for a message box rather than returned, so a bridge has nothing
-//      to hand back but "it did not throw".
+// WHAT CONTRACT v1 DOES NOT HAVE: any mass-properties route. That rides on
+// /scripts/execute instead -- send Python, read what it printed. See FusionScripts.
 //
 // ONE THING THE TRANSPORT CANNOT TELL YOU, stated here because it will look like a bug.
 // A closed Fusion and a running Fusion without the add-in loaded are INDISTINGUISHABLE from
@@ -77,52 +67,113 @@ namespace DWM.Shared.Tooling.Cad
         public override string ToString() => Ok ? $"ok: {RawBody}" : $"failed: {Error}";
     }
 
+    /// <summary>One command mapped onto DWM_FusionAddIn's contract v1.</summary>
+    public sealed class FusionCommand
+    {
+        /// <summary>Route, relative to the base address. No leading slash.</summary>
+        public string Path { get; init; } = string.Empty;
+
+        /// <summary>Turns the caller's payload into the body this route expects.</summary>
+        public Func<object?, object?> BuildBody { get; init; } = payload => payload ?? new { };
+
+        /// <summary>
+        /// Pulls the actual result out of the reply.
+        ///
+        /// NEEDED BECAUSE /scripts/execute NESTS IT. That route answers
+        /// {"success": true, "output": "&lt;whatever the script printed&gt;"}, so a script
+        /// that prints JSON has its payload inside a STRING one level down. Reading the
+        /// envelope as the result would hand back a body with no components in it and no
+        /// indication why.
+        /// </summary>
+        public Func<JsonElement, JsonElement?> ReadResult { get; init; } = body => body;
+    }
+
     /// <summary>
-    /// How a command becomes an HTTP request.
+    /// How a command becomes an HTTP request, against DWM_FusionAddIn contract v1.
     ///
-    /// DATA, NOT LITERALS, because none of it has been checked against the add-in that will
-    /// answer it. The default assumes the plainest possible shape -- POST the payload as JSON
-    /// to /<c>command</c> -- which is a guess, not a specification.
+    /// PINNED FROM THE ADD-IN'S SOURCE on 2026-08-05, not guessed: TSPFounder/DWM-Fusion-AddIn
+    /// v0.2.0. Still data rather than literals, because the add-in is versioned and its
+    /// contract will move.
+    ///
+    /// THE ENVELOPE IS "success", NOT "ok". An earlier draft of this file assumed "ok" -- a
+    /// perfectly reasonable guess that would have read every failure as a success, because a
+    /// missing flag is treated as "worked". That is the whole reason these are data.
     /// </summary>
     public sealed class FusionProtocol
     {
-        /// <summary>Where the add-in listens. Must match what the Python binds.</summary>
+        /// <summary>Where the add-in listens. Matches PORT in DWM_FusionAddIn.py.</summary>
         public Uri BaseAddress { get; init; } = new("http://127.0.0.1:18750/");
 
-        /// <summary>Liveness endpoint. Answered without touching the Fusion API.</summary>
+        /// <summary>Liveness. Answered without touching the Fusion API.</summary>
         public string PingPath { get; init; } = "ping";
 
-        /// <summary>Builds the request path for a command. Default: the command is the path.</summary>
-        public Func<string, string> PathFor { get; init; } = command => command;
-
         /// <summary>
-        /// Reads the add-in's own success flag out of a JSON reply.
+        /// The add-in's own success flag, which is NOT the HTTP status.
         ///
-        /// SEPARATE FROM THE HTTP STATUS ON PURPOSE. A Python handler that catches an
-        /// exception and returns 200 with {"ok": false} is the normal shape, and treating
-        /// 200 as success would be this project's oldest mistake in a new place -- the status
-        /// living somewhere other than where a caller would naturally look.
+        /// It answers 200 with {"success": false} for a script that raised -- an ordinary
+        /// Python handler catching its own exception. Reading only the transport would call
+        /// that a success, which is this project's oldest bug in its fifth costume.
         /// </summary>
         public Func<JsonElement, bool> ReadOk { get; init; } = json =>
-            !json.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.False;
+            !json.TryGetProperty("success", out var ok) || ok.ValueKind != JsonValueKind.False;
 
-        /// <summary>Reads the add-in's error text out of a JSON reply, when it has one.</summary>
         public Func<JsonElement, string?> ReadError { get; init; } = json =>
             json.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String
                 ? e.GetString()
                 : null;
 
+        public IReadOnlyDictionary<string, FusionCommand> Commands { get; init; } =
+            new Dictionary<string, FusionCommand>(StringComparer.OrdinalIgnoreCase)
+            {
+                // NO NATIVE MASS-PROPERTIES ROUTE EXISTS in contract v1, so this rides on
+                // /scripts/execute: send Python that prints JSON, read it back out of
+                // "output". Exactly the shape MatlabStageService uses -- generate a guarded
+                // command, run it in the tool, read a value back -- because the constraint is
+                // the same one: the tool will not hand you a typed result, so you ask it to
+                // print one.
+                ["massProperties"] = new FusionCommand
+                {
+                    Path = "scripts/execute",
+                    BuildBody = _ => new { source = FusionScripts.MassProperties },
+                    ReadResult = ReadPrintedJson
+                },
+
+                ["build"] = new FusionCommand
+                {
+                    Path = "scripts/execute",
+                    BuildBody = payload => new { source = FusionScripts.BuildRotor(payload) },
+                    ReadResult = ReadPrintedJson
+                },
+
+                ["export"] = new FusionCommand
+                {
+                    Path = "documents/active/export"
+                    // Body passes straight through: the route wants {format, outputPath}.
+                },
+
+                ["save"] = new FusionCommand { Path = "documents/active/save" },
+                ["newDocument"] = new FusionCommand { Path = "documents" },
+                ["openDocument"] = new FusionCommand { Path = "documents/open" }
+            };
+
         /// <summary>
-        /// Command names. Guesses. The add-in decides these, not this file.
+        /// Parse the JSON a script printed, out of the "output" string.
         ///
-        /// "build" is first because the existing Python is a GENERATIVE script: the unit of
-        /// work for this project is "construct the rotor from CONFIG", not "query whatever
-        /// document happens to be open". Mass properties are what comes after a build, not
-        /// instead of one.
+        /// Returns null when it is not JSON -- a traceback, or a script that printed nothing.
+        /// Null is honest: the caller then reports the raw body rather than a parse crash.
         /// </summary>
-        public string BuildCommand { get; init; } = "build";
-        public string MassPropertiesCommand { get; init; } = "massProperties";
-        public string ExportCommand { get; init; } = "export";
+        private static JsonElement? ReadPrintedJson(JsonElement body)
+        {
+            if (!body.TryGetProperty("output", out var output) ||
+                output.ValueKind != JsonValueKind.String)
+                return null;
+
+            var text = output.GetString();
+            if (string.IsNullOrWhiteSpace(text)) return null;
+
+            try { return JsonDocument.Parse(text).RootElement.Clone(); }
+            catch (JsonException) { return null; }
+        }
     }
 
     public interface IFusionSession : IDisposable
@@ -185,30 +236,45 @@ namespace DWM.Shared.Tooling.Cad
             if (string.IsNullOrWhiteSpace(command))
                 throw new ArgumentException("A command is required.", nameof(command));
 
-            var path = _protocol.PathFor(command);
+            if (!_protocol.Commands.TryGetValue(command, out var spec))
+            {
+                return new FusionResponse
+                {
+                    Ok = false,
+                    Error = $"No route is mapped to '{command}'. Mapped: " +
+                            string.Join(", ", _protocol.Commands.Keys) + "."
+                };
+            }
 
             try
             {
                 using var reply = await _http
-                    .PostAsJsonAsync(path, payload ?? new { }, ct)
+                    .PostAsJsonAsync(spec.Path, spec.BuildBody(payload), ct)
                     .ConfigureAwait(false);
 
                 var body = await reply.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
-                JsonElement? json = null;
-                try { json = JsonDocument.Parse(body).RootElement.Clone(); }
+                JsonElement? envelope = null;
+                try { envelope = JsonDocument.Parse(body).RootElement.Clone(); }
                 catch (JsonException) { /* not JSON; RawBody still carries it */ }
 
-                // BOTH LAYERS CHECKED. The HTTP status says the request was handled; the
-                // add-in's own flag says whether Fusion did the thing. A 200 carrying
-                // {"ok": false} is an ordinary Python handler catching its own exception.
-                var addInOk = json is null || _protocol.ReadOk(json.Value);
-                var addInError = json is null ? null : _protocol.ReadError(json.Value);
+                // BOTH LAYERS CHECKED. The HTTP status says the request was routed; the
+                // add-in's own "success" flag says whether Fusion did the thing. A 200
+                // carrying {"success": false} is an ordinary Python handler catching its own
+                // exception, and /scripts/execute answers exactly that way for a script that
+                // raised.
+                var addInOk = envelope is null || _protocol.ReadOk(envelope.Value);
+                var addInError = envelope is null ? null : _protocol.ReadError(envelope.Value);
+
+                // Unwrapped AFTER the flags are read, because the envelope carries the verdict
+                // and the payload carries the answer -- reading either one for both loses
+                // something.
+                var result = envelope is null ? null : spec.ReadResult(envelope.Value);
 
                 return new FusionResponse
                 {
                     Ok = reply.IsSuccessStatusCode && addInOk,
-                    Json = json,
+                    Json = result,
                     RawBody = body,
                     HttpStatus = (int)reply.StatusCode,
                     Error = reply.IsSuccessStatusCode
@@ -221,7 +287,7 @@ namespace DWM.Shared.Tooling.Cad
                 return new FusionResponse
                 {
                     Ok = false,
-                    Error = Unreachable(command, ex)
+                    Error = Unreachable(command, spec.Path, ex)
                 };
             }
         }
@@ -234,7 +300,7 @@ namespace DWM.Shared.Tooling.Cad
         /// the connection identically. Naming one would be a coin toss printed as a diagnosis,
         /// and the registry already records this as the tool's known limitation.
         /// </summary>
-        private string Unreachable(string command, Exception ex)
+        private string Unreachable(string command, string path, Exception ex)
         {
             var timedOut = ex is TaskCanceledException;
 
@@ -244,7 +310,7 @@ namespace DWM.Shared.Tooling.Cad
                   "That API is NOT thread-safe: work has to be marshalled onto Fusion's main " +
                   "thread with a custom event, and an add-in that skips this hangs or crashes " +
                   "intermittently rather than failing cleanly."
-                : $"Nothing answered at {_protocol.BaseAddress}{_protocol.PathFor(command)}.\n\n" +
+                : $"Nothing answered at {_protocol.BaseAddress}{path}.\n\n" +
                   "This CANNOT distinguish between Fusion not running and Fusion running " +
                   "without the DWM add-in loaded -- both refuse the connection the same way. " +
                   "Check Fusion is open, then Utilities > Scripts and Add-Ins > Add-Ins that " +
