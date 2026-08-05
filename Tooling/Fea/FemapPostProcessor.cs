@@ -22,6 +22,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace DWM.Shared.Tooling.Fea
 {
@@ -90,11 +91,17 @@ namespace DWM.Shared.Tooling.Fea
                 // hand-off bug again, one tool along.
                 session.Detach();
 
-                session.Invoke(_api.SetVisible, true);
+                // Visibility is cosmetic; a FEMAP that will not show itself still imported.
+                try { session.Invoke(_api.SetVisible, true); } catch (Exception) { }
 
                 // Order is not optional: results have nowhere to land until the model exists.
-                session.Invoke(_api.ReadNastranModel, deckPath);
-                session.Invoke(_api.ReadNastranResults, 1, resultsPath);
+                var modelShape = TryShapes(session, _api.ReadNastranModel, deckPath, "read the model");
+                var resultsShape = TryShapes(session, _api.ReadNastranResults, resultsPath, "read the results");
+
+                warnings.Add($"FEMAP accepted: {modelShape} and {resultsShape}. " +
+                             "If these are the shapes that work on this FEMAP, they can be " +
+                             "promoted to the only candidates -- the list exists because the " +
+                             "API reference has not been read, not because variety is wanted.");
 
                 if (!attached)
                     warnings.Add(
@@ -121,6 +128,47 @@ namespace DWM.Shared.Tooling.Fea
                 DeckPath = deckPath,
                 ResultsPath = resultsPath
             };
+        }
+
+
+        /// <summary>
+        /// Try each candidate call shape until one succeeds; returns the signature that worked.
+        ///
+        /// A COM type mismatch is cheap to provoke and tells you nothing dangerous -- FEMAP
+        /// either coerces the arguments or refuses them, and refusing changes no state. So
+        /// trying is a legitimate probe here in a way it would not be for, say, a solver that
+        /// might half-write a file.
+        /// </summary>
+        private static string TryShapes(
+            IFemapSession session, IReadOnlyList<FemapCallShape> shapes, string path, string what)
+        {
+            var attempts = new List<string>();
+
+            foreach (var shape in shapes)
+            {
+                try
+                {
+                    session.Invoke(shape.Method, shape.Args(path));
+                    return shape.Signature;
+                }
+                catch (Exception ex)
+                {
+                    attempts.Add($"{shape.Signature} -> {FirstLine(ex.Message)}");
+                }
+            }
+
+            throw new FemapSessionException(
+                $"Could not {what}. Every candidate call shape was refused:\n  " +
+                string.Join("\n  ", attempts) + "\n\n" +
+                "The right signature is in FEMAP's API reference under the install " +
+                "(C:\\FEMAPv102). Pass a corrected FemapApiNames -- the shapes are data, so " +
+                "this needs no rebuild.");
+        }
+
+        private static string FirstLine(string message)
+        {
+            var index = message.IndexOf('\n');
+            return index < 0 ? message : message[..index];
         }
 
         private static FemapPostProcessResult Failed(
