@@ -96,7 +96,46 @@ namespace DWM.Shared.Tooling
                 ResultExtensions = new[] { ".csv" },
                 KnownLimitation =
                     "The generic ProgID resolves to ONE release. Pin a versioned ProgID per " +
-                    "project or an attach will miss the release you have open."
+                    "project or an attach will miss the release you have open.",
+
+                // THE R2011a LICENCE, FROM `ver`, NOT FROM MEMORY. Licence 639293.
+                //
+                // Recorded 2026-08-05 after this project's own remembered inventory turned out
+                // to be wrong by four products -- it named six toolboxes where eleven are
+                // installed, and on the strength of that omission a confident claim was made
+                // that Simulink Control Design and Simulink Design Optimization were NOT
+                // licensed and would block OOSEM phase H. Both are licensed. The full list
+                // lives here so the next such question is answered by reading rather than
+                // recalling.
+                Components = new[]
+                {
+                    new ToolComponent { Name = "Simulink",               Version = "7.7" },
+                    new ToolComponent { Name = "Aerospace Blockset",     Version = "3.7" },
+                    // A distinct product from the Blockset, and one of the four the earlier
+                    // inventory missed by treating "Aerospace" as a single item.
+                    new ToolComponent { Name = "Aerospace Toolbox",      Version = "2.7" },
+                    new ToolComponent { Name = "Control System Toolbox", Version = "9.1" },
+                    new ToolComponent { Name = "Fixed-Point Toolbox",    Version = "3.3" },
+                    new ToolComponent { Name = "Optimization Toolbox",   Version = "6.0" },
+                    new ToolComponent
+                    {
+                        Name = "Partial Differential Equation Toolbox",
+                        Version = "1.0.18",
+                        // CONFIRMED 2026-08-05, and the reason ToolComponent carries a limit of
+                        // its own. The R2011a pdetool line is 2-D only; 3-D geometry arrived in
+                        // far later releases. It does not announce itself -- a 2-D solve of a
+                        // 3-D problem returns plausible numbers rather than an error, which is
+                        // this project's most-repeated failure shape.
+                        KnownLimitation =
+                            "2-D ONLY. No 3-D geometry in this release, and a 2-D solve of a " +
+                            "3-D problem returns plausible numbers rather than an error. " +
+                            "Structural work goes to MYSTRAN/FEMAP, which are 3-D."
+                    },
+                    new ToolComponent { Name = "Simulink Control Design",      Version = "3.3" },
+                    new ToolComponent { Name = "Simulink Design Optimization", Version = "1.2.1" },
+                    new ToolComponent { Name = "Simulink Verification and Validation", Version = "3.1" },
+                    new ToolComponent { Name = "Symbolic Math Toolbox",        Version = "5.6" }
+                }
             },
             new()
             {

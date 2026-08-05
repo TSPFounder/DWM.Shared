@@ -5,9 +5,42 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace DWM.Shared.Tooling
 {
+    /// <summary>
+    /// One licensed component of a tool -- a MATLAB toolbox, a FEMAP add-on -- with its
+    /// version and, where it has one, the thing it cannot do.
+    ///
+    /// WHY THIS IS NOT JUST MORE TEXT ON THE TOOL. "Is MATLAB installed" is not the question
+    /// anyone actually has; "can this machine solve that" is. The R2011a licence carries
+    /// eleven toolboxes, and on 2026-08-05 this project's own recollected inventory was wrong
+    /// by four of them -- which produced a confident and incorrect claim that two toolboxes
+    /// the OOSEM process calls for were unlicensed. A remembered inventory is not an inventory.
+    ///
+    /// VERSIONS ARE PART OF THE RECORD, not decoration. Pinning the tool version per project
+    /// is one of TOOLING.md's two carried-forward principles, and it was a version-less
+    /// toolbox name that produced the wrong claim above.
+    /// </summary>
+    public sealed class ToolComponent
+    {
+        public string Name { get; init; } = string.Empty;
+
+        /// <summary>As the tool reports it -- MATLAB's `ver` output, not a marketing name.</summary>
+        public string Version { get; init; } = string.Empty;
+
+        /// <summary>
+        /// What this component cannot do. Same purpose as
+        /// <see cref="ToolDescriptor.KnownLimitation"/> one level down, and the same
+        /// justification: limits are what get assumed wrongly, not features.
+        /// </summary>
+        public string? KnownLimitation { get; init; }
+
+        public override string ToString() =>
+            KnownLimitation is null ? $"{Name} {Version}" : $"{Name} {Version} -- {KnownLimitation}";
+    }
+
     public sealed class ToolDescriptor
     {
         /// <summary>Stable slug, e.g. "matlab", "mystran". Used in project files -- never renamed casually.</summary>
@@ -80,6 +113,38 @@ namespace DWM.Shared.Tooling
         /// meaning "whichever is running", addpath succeeding on a folder with no code in it.
         /// </summary>
         public string? KnownLimitation { get; init; }
+
+        /// <summary>
+        /// Licensed components -- toolboxes, blocksets, add-ons -- version-stamped, with their
+        /// own limits. Empty for a tool that is one indivisible thing, like MYSTRAN.
+        /// </summary>
+        public IReadOnlyList<ToolComponent> Components { get; init; } = Array.Empty<ToolComponent>();
+
+        /// <summary>True if a component with this name is licensed. Case-insensitive.</summary>
+        public bool HasComponent(string name) =>
+            name is not null &&
+            Components.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The tool's own limitation plus every component limitation, one per line.
+        ///
+        /// Folded into a single string ON PURPOSE, because the UI already renders
+        /// <see cref="KnownLimitation"/> and a brand-new field that nothing displays would
+        /// repeat the run-history bug -- warnings collected for two builds into a control that
+        /// never showed them. A limit nobody can read is not a limit.
+        /// </summary>
+        public string? AllLimitations
+        {
+            get
+            {
+                var lines = new List<string>();
+                if (!string.IsNullOrWhiteSpace(KnownLimitation)) lines.Add(KnownLimitation!);
+                foreach (var c in Components)
+                    if (!string.IsNullOrWhiteSpace(c.KnownLimitation))
+                        lines.Add($"{c.Name} {c.Version}: {c.KnownLimitation}");
+                return lines.Count == 0 ? null : string.Join("\n", lines);
+            }
+        }
 
         public override string ToString() => $"{DisplayName} ({Id}, {Kind})";
     }

@@ -199,7 +199,12 @@ namespace DWM.Shared.Tooling
                     ProjectRoot = projectRoot,
                     RunLabel = RunLabelFor(tool.Id),
                     Subtitle = Describe(tool, stage),
-                    KnownLimitation = tool.KnownLimitation,
+                    // AllLimitations, not KnownLimitation: the tool's own limit plus any
+                    // component limits, routed through the one property the UI already
+                    // renders. Adding a separate field that nothing displays would repeat the
+                    // run-history bug, where warnings were collected for two builds into a
+                    // control that never showed them.
+                    KnownLimitation = tool.AllLimitations,
                     Runs = runsForStage?.Invoke(stage.Id) ?? Array.Empty<ToolRun>()
                 });
             }
