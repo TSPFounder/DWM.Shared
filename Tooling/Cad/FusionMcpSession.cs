@@ -291,7 +291,9 @@ namespace DWM.Shared.Tooling.Cad
             switch (transport)
             {
                 case FusionTransport.Bridge:
-                    return () => new FusionHttpSession(protocol);
+                    // FusionLibrary's client, adapted -- not one of ours. See
+                    // FusionRunnerSession for why the one this replaced is gone.
+                    return () => new FusionRunnerSession(protocol);
 
                 case FusionTransport.Mcp:
                     var options = mcp ?? new FusionMcpOptions();

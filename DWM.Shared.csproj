@@ -18,4 +18,28 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
   </ItemGroup>
 
+  <!--
+    CAD_Library and FusionLibrary supply the CAD operation IR, the Fusion Python
+    emitter and the add-in HTTP client. DWM.Shared had its own client for the same
+    add-in on the same port; that duplicate is gone, and these are the one client.
+
+    PROJECT REFERENCES, NOT HintPaths. FusionLibrary.csproj points at
+    ..\..\CAD_Library\CAD_Library\bin\Debug\net10.0\CAD_Library.dll, which builds
+    only if CAD_Library was built first and silently uses a stale DLL if it was
+    built a while ago. A ProjectReference makes the build order the build system's
+    problem rather than the reader's.
+
+    THE LAYOUT THIS ASSUMES is the one FusionLibrary already assumes: every repo
+    checked out side by side under a common Repos folder, e.g.
+      Repos\DWM.Shared\        (this project)
+      Repos\CAD_Library\
+      Repos\FusionLibrary\
+    A checkout somewhere else fails at restore with "project file not found",
+    naming the path it wanted -- which is the right way for this to break.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\CAD_Library\CAD_Library\CAD_Library.csproj" />
+    <ProjectReference Include="..\FusionLibrary\FusionLibrary\FusionLibrary.csproj" />
+  </ItemGroup>
+
 </Project>
