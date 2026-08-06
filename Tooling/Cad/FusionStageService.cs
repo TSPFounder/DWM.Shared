@@ -140,6 +140,25 @@ namespace DWM.Shared.Tooling.Cad
                         "reading the wrong one -- it operates on the ACTIVE document, which is " +
                         "whatever has focus rather than whatever this project names.");
 
+                // NOTHING WEIGHS ANYTHING. Caught on 2026-08-05 by a real read that this
+                // service would otherwise have called a success: an empty design returns its
+                // root component alone -- no bodies, so no mass, and the zero-mass guard below
+                // correctly stays quiet because a bodiless component is legitimately massless.
+                //
+                // Every individual judgement was right and the conclusion was still useless.
+                // A design where NOTHING has mass is not a light design; it is the wrong
+                // document, and saying so is the difference between a caller retrying with the
+                // right tab focused and a caller believing their rotor weighs nothing.
+                if (components.All(c => c.MassKg <= 0))
+                    return Failed(stageId, startedUtc,
+                        $"Nothing in the active document has any mass. Read {components.Count} " +
+                        $"component(s): {string.Join(", ", components.Select(c => c.ComponentName))}.\n\n" +
+                        "This is almost always the WRONG DOCUMENT. The add-in reads whatever " +
+                        "is ACTIVE in Fusion, not whatever this project names, and an empty " +
+                        "design returns just its root component. Bring the intended document " +
+                        "to the front and retry.\n\n" +
+                        "Note that an unsaved document does not survive a Fusion restart.");
+
                 // THE ZERO-MASS REFUSAL. See the file header: an Inactive (Read-Only)
                 // component can report 0 rather than raising, and zero mass reaching a
                 // Simulink model produces a simulation that runs and means nothing.
