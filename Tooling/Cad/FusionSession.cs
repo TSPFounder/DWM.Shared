@@ -43,6 +43,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using CAD;   // ICADParameterCollection
 
 namespace DWM.Shared.Tooling.Cad
 {
@@ -125,6 +126,23 @@ namespace DWM.Shared.Tooling.Cad
 
         Task<FusionResponse> InvokeAsync(string command, object? payload = null,
             CancellationToken ct = default);
+
+        /// <summary>
+        /// The active document's user parameters, or NULL when this transport cannot reach them.
+        ///
+        /// WHY NULL RATHER THAN AN EXCEPTION OR AN EMPTY COLLECTION. Not every transport has a
+        /// parameter surface: the MCP route talks to Autodesk's server, whose tool names are
+        /// still guesses, and nothing there is mapped to parameters. An empty collection would
+        /// be indistinguishable from a document that genuinely has none -- which is this
+        /// project's oldest bug shape, a real answer and a missing capability looking the same.
+        /// Throwing would make "does this transport support parameters?" cost an exception.
+        ///
+        /// A DEFAULT IMPLEMENTATION, so a transport that cannot do this says so by saying
+        /// nothing. FusionParameterService turns the null into a message that names the
+        /// transport and the alternative.
+        /// </summary>
+        Task<ICADParameterCollection?> GetParametersAsync(CancellationToken ct = default)
+            => Task.FromResult<ICADParameterCollection?>(null);
     }
 
     public sealed class FusionSessionException : Exception

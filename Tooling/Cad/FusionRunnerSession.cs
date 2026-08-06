@@ -63,6 +63,16 @@ namespace DWM.Shared.Tooling.Cad
         private readonly List<IDisposable> _owned = new();
 
         /// <summary>
+        /// Null when the caller injected its own ping, which is what the tests do.
+        ///
+        /// Parameters need the REST surface rather than the script runner, so a session built
+        /// for testing the script mapping has nothing to read them with. That is reported by
+        /// GetParametersAsync rather than papered over: a fake that silently returned an empty
+        /// parameter list would look exactly like a real document with no parameters.
+        /// </summary>
+        private readonly FusionApplication? _app;
+
+        /// <summary>
         /// Connects to the add-in named by the protocol's base address.
         /// </summary>
         /// <param name="runner">
@@ -102,14 +112,37 @@ namespace DWM.Shared.Tooling.Cad
                 // Fusion is genuinely responsive. That is a stronger signal than a connect
                 // test -- and it is also why it HANGS rather than failing fast while a modal
                 // dialog is open.
-                var app = new FusionApplication(baseUrl);
-                _owned.Add(app);
-                _ping = app.PingAsync;
+                _app = new FusionApplication(baseUrl);
+                _owned.Add(_app);
+                _ping = _app.PingAsync;
             }
             else
             {
                 _ping = ping;
             }
+        }
+
+        /// <summary>
+        /// The active document's user parameters, over the add-in's REST surface.
+        ///
+        /// NOT THROUGH THE SCRIPT RUNNER, and that is the point. Everything else this session
+        /// does is Python generated, sent, and executed; parameters have their own routes
+        /// (GET /documents/active/parameters, PATCH .../{name}) that hand back typed values
+        /// with no round trip through printed JSON.
+        ///
+        /// WHICH ALSO MEANS THEY ARE LESS PROVEN. /scripts/execute has been exercised against
+        /// Fusion repeatedly; these routes have not been exercised at all. FusionParameterService
+        /// is where that shows up as a message rather than as a stack trace.
+        ///
+        /// Returns null when this session has no REST client, which happens only when a caller
+        /// injected its own ping.
+        /// </summary>
+        public async Task<ICADParameterCollection?> GetParametersAsync(CancellationToken ct = default)
+        {
+            if (_app is null) return null;
+
+            var document = await _app.GetActiveDocumentAsync(ct).ConfigureAwait(false);
+            return document.Parameters;
         }
 
         public async Task<bool> PingAsync(CancellationToken ct = default)
