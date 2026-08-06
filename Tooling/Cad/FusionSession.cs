@@ -143,6 +143,28 @@ namespace DWM.Shared.Tooling.Cad
         /// </summary>
         Task<ICADParameterCollection?> GetParametersAsync(CancellationToken ct = default)
             => Task.FromResult<ICADParameterCollection?>(null);
+
+        /// <summary>
+        /// Create a new Fusion design and make it active, or null when unsupported.
+        ///
+        /// THIS IS THE ONLY COMMAND THAT CHANGES WHAT EVERY OTHER COMMAND MEANS. The add-in
+        /// operates on the ACTIVE document, so creating one silently retargets the next
+        /// massProperties, revolve and export. That is useful and it is a foot-gun, which is
+        /// why FusionDocumentService says so on every call rather than once in a comment.
+        /// </summary>
+        Task<ICADDocument?> CreateDocumentAsync(string name, CancellationToken ct = default)
+            => Task.FromResult<ICADDocument?>(null);
+
+        /// <summary>
+        /// Open a document by path ON THE MACHINE RUNNING FUSION, or null when unsupported.
+        ///
+        /// AND THIS RETIRES A CLAIM MADE REPEATEDLY IN THIS CODEBASE. "Nothing outside Fusion
+        /// can make it open a file" is true of the SCRIPT path and false of the add-in's REST
+        /// surface, which has had /documents/open all along. The narrower statement is the
+        /// correct one, and the older comments that overreach are wrong rather than cautious.
+        /// </summary>
+        Task<ICADDocument?> OpenDocumentAsync(string path, CancellationToken ct = default)
+            => Task.FromResult<ICADDocument?>(null);
     }
 
     public sealed class FusionSessionException : Exception

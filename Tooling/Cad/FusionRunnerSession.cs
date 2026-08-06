@@ -145,6 +145,21 @@ namespace DWM.Shared.Tooling.Cad
             return document.Parameters;
         }
 
+        /// <summary>
+        /// POST /documents, then hydrate the new document.
+        ///
+        /// NOTE WHAT THE SECOND HALF COSTS. FusionApplication builds the returned document by
+        /// GETting /documents/active/parameters, so a create depends on TWO routes and fails
+        /// if either is missing. A 404 here is therefore ambiguous between them, and
+        /// FusionDocumentService says so rather than blaming the one that was asked for.
+        /// </summary>
+        public async Task<ICADDocument?> CreateDocumentAsync(string name, CancellationToken ct = default)
+            => _app is null ? null : await _app.CreateDocumentAsync(name, ct).ConfigureAwait(false);
+
+        /// <summary>POST /documents/open, then hydrate. Same two-route dependency as create.</summary>
+        public async Task<ICADDocument?> OpenDocumentAsync(string path, CancellationToken ct = default)
+            => _app is null ? null : await _app.OpenDocumentAsync(path, ct).ConfigureAwait(false);
+
         public async Task<bool> PingAsync(CancellationToken ct = default)
         {
             try

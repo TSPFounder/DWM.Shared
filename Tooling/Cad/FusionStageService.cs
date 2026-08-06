@@ -135,10 +135,15 @@ namespace DWM.Shared.Tooling.Cad
         /// <summary>
         /// Read every component's mass properties out of the open Fusion document.
         ///
-        /// Takes no document path, and that is not an oversight: nothing outside Fusion can
-        /// make it open a file. The add-in operates on whatever is active, so the caller's job
-        /// is to say which document was read, not to choose it. The name comes back in the run
-        /// record for exactly that reason.
+        /// Takes no document path, and that is not an oversight: this reads whatever is ACTIVE,
+        /// so the caller's job is to say which document was read rather than to choose it here.
+        /// The name comes back in the run record for exactly that reason.
+        ///
+        /// CORRECTION, 2026-08-06. This used to say "nothing outside Fusion can make it open a
+        /// file". That is true of the SCRIPT path and false of the add-in, which has had POST
+        /// /documents and POST /documents/open all along -- see FusionDocumentService. The
+        /// claim was generalised from what /scripts/execute could do to the whole transport
+        /// without reading the rest of the contract.
         /// </summary>
         public async Task<FusionStageResult> ReadMassPropertiesAsync(
             string stageId = "cad", CancellationToken ct = default)
