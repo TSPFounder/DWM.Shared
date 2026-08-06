@@ -35,7 +35,7 @@
       Repos\CAD_Library\
       Repos\FusionLibrary\
     A checkout somewhere else fails at restore with "project file not found",
-    naming the path it wanted -- which is the right way for this to break.
+    naming the path it wanted, which is the right way for this to break.
   -->
   <ItemGroup>
     <ProjectReference Include="..\CAD_Library\CAD_Library\CAD_Library.csproj" />
