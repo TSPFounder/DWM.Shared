@@ -8,10 +8,7 @@
 // Python running INSIDE Fusion, reachable only from Fusion's own Scripts and Add-Ins. Nothing
 // outside the process can reach in.
 //
-// So DWM has to supply the server as well as the client. `InteractiveHttp` and port 18750 in
-// the registry are not describing something that exists -- they describe an add-in that must
-// be written, installed under
-// %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\, and set to run on startup.
+// So DWM supplies the server as well as the client, and it already did -- see below.
 //
 // THE ADD-IN ALREADY EXISTS, AND THIS IS PINNED TO IT.
 //
@@ -104,7 +101,12 @@ namespace DWM.Shared.Tooling.Cad
         /// <summary>Where the add-in listens. Matches PORT in DWM_FusionAddIn.py.</summary>
         public Uri BaseAddress { get; init; } = new("http://127.0.0.1:18750/");
 
-        /// <summary>Liveness. Answered without touching the Fusion API.</summary>
+        /// <summary>
+        /// Liveness -- but NOT a bare socket check. This add-in's /ping is routed through the
+        /// main thread and reads _app.version, so it answers only when Fusion is genuinely
+        /// responsive. That makes it a stronger signal than a connect test, and it is also why
+        /// it HANGS rather than failing fast while a modal dialog is open.
+        /// </summary>
         public string PingPath { get; init; } = "ping";
 
         /// <summary>
@@ -305,11 +307,15 @@ namespace DWM.Shared.Tooling.Cad
             var timedOut = ex is TaskCanceledException;
 
             return timedOut
-                ? $"Fusion did not answer '{command}' within the timeout.\n\n" +
-                  "The usual cause is the add-in calling the Fusion API from its HTTP thread. " +
-                  "That API is NOT thread-safe: work has to be marshalled onto Fusion's main " +
-                  "thread with a custom event, and an add-in that skips this hangs or crashes " +
-                  "intermittently rather than failing cleanly."
+                ? $"Fusion accepted the connection but did not answer '{command}'.\n\n" +
+                  "THE USUAL CAUSE IS A MODAL DIALOG. Fusion does not pump events while one is " +
+                  "open, so the add-in's custom event never fires and every request queues " +
+                  "behind it. Observed 2026-08-05: the SCRIPTS AND ADD-INS DIALOG ITSELF does " +
+                  "this -- the window used to start the add-in blocks the add-in. So does " +
+                  "WindTurbineBlade's own \"Rotor assembly built\" message box, which is why " +
+                  "the build command calls build_rotor rather than run().\n\n" +
+                  "Close any open Fusion dialog and retry. A connection that is REFUSED rather " +
+                  "than hanging is a different fault: the add-in is not running at all."
                 : $"Nothing answered at {_protocol.BaseAddress}{path}.\n\n" +
                   "This CANNOT distinguish between Fusion not running and Fusion running " +
                   "without the DWM add-in loaded -- both refuse the connection the same way. " +
