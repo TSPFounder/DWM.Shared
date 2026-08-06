@@ -43,17 +43,31 @@ namespace DWM.Shared.Tooling.Cad
         /// <summary>
         /// Moments of inertia, kg*m^2, in the order xx, yy, zz, xy, yz, xz.
         ///
-        /// THE UNIT IS NOW EVIDENCED RATHER THAN ASSUMED, so FusionScripts converts it
-        /// (x 1e-4) instead of handing back raw numbers under an UNVERIFIED label. The
-        /// 2026-08-06 rotor read gives radius of gyration sqrt(I/m) = 1973: that is 19.73 m
-        /// if the underlying length unit is the centimetre and 1973 m if it is the metre.
-        /// The blade spans 1.5 to 60 m with its centre of mass at 15.98 m, so only the
-        /// centimetre reading can be true -- the other puts the rotor's inertia 33
-        /// blade-lengths out.
+        /// ABOUT THE DOCUMENT ORIGIN, NOT THE CENTRE OF MASS. This is the part that will
+        /// silently corrupt a mechanism model, because both readings are plausible numbers
+        /// with the right units. Measured 2026-08-06 on a hollow steel tube built by
+        /// `fusion revolve`: ri 0.10 m, ro 0.12 m, h 0.50 m, 54.255305 kg, centre of mass a
+        /// quarter of a metre off the origin.
+        ///
+        ///   Izz (the revolve axis, through the origin)  0.661915   closed form 0.661915
+        ///   Ixx about the CENTRE OF MASS                1.46128
+        ///   plus m*d^2, d = 0.25                      + 3.39096
+        ///   Ixx about the ORIGIN                        4.85223   Fusion  4.85223
+        ///
+        /// Six significant figures on the shifted value and none on the unshifted one.
+        /// ANYTHING WANTING INERTIA ABOUT THE CENTRE OF MASS -- Simscape does -- must
+        /// subtract the parallel-axis term itself. Nothing here does it, because doing it
+        /// silently would replace one unstated convention with another.
+        ///
+        /// THE UNIT IS ALSO NOW MEASURED RATHER THAN ARGUED. FusionScripts converts kg*cm^2
+        /// to kg*m^2 (x 1e-4); the tube's axial moment matches the closed form
+        /// (ri^2 + ro^2)/2 exactly, which is the hand-computed solid the original UNVERIFIED
+        /// label said was missing. The earlier radius-of-gyration argument from the rotor
+        /// pointed the same way but was inference; this is not.
         ///
         /// This assumes the numbers came from FusionScripts.MassProperties. The MCP route
-        /// calls Autodesk's own tool, whose unit is NOT established; if that route is ever
-        /// used for inertia, verify it the same way rather than inheriting this.
+        /// calls Autodesk's own tool, whose unit and reference point are NOT established;
+        /// if that route is ever used for inertia, measure it the same way.
         /// </summary>
         public double[] Inertia { get; init; } = Array.Empty<double>();
 
