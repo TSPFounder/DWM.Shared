@@ -150,8 +150,15 @@ namespace DWM.Shared.Tooling.Cad
         /// a single logical message may be split across several data lines which are joined
         /// with newlines. The LAST parseable data payload wins: a server may send progress
         /// notifications before the real reply, and the reply is what was asked for.
+        ///
+        /// PUBLIC SO IT CAN BE TESTED. DWM.Shared declares no InternalsVisibleTo, so an
+        /// internal member is invisible to DWMStudio.Tests -- and the failure arrives as
+        /// CS0117 "does not contain a definition for ParseMessage", which reads like the
+        /// method is missing rather than merely out of reach. This is the second member on
+        /// this tool to be written internal and then have to be opened up; the first was
+        /// FusionStageService.FindAggregateRoot, hours earlier.
         /// </summary>
-        internal static JsonElement ParseMessage(string body, string? mediaType)
+        public static JsonElement ParseMessage(string body, string? mediaType)
         {
             var looksLikeSse = (mediaType?.Contains("event-stream", StringComparison.OrdinalIgnoreCase) ?? false)
                                || body.StartsWith("event:", StringComparison.Ordinal)
