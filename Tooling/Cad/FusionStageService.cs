@@ -41,23 +41,36 @@ namespace DWM.Shared.Tooling.Cad
         public double[] CentreOfMass { get; init; } = Array.Empty<double>();
 
         /// <summary>
-        /// Moments of inertia as the add-in returned them, UNCONVERTED.
+        /// Moments of inertia, kg*m^2, in the order xx, yy, zz, xy, yz, xz.
         ///
-        /// Fusion's internal length unit is the centimetre, so these are believed to be
-        /// kg*cm^2 -- but that has not been checked against a hand-computed solid, and
-        /// silently applying a factor that might be wrong is worse than handing over raw
-        /// numbers with a label. Nothing in this service makes a decision from them.
+        /// THE UNIT IS NOW EVIDENCED RATHER THAN ASSUMED, so FusionScripts converts it
+        /// (x 1e-4) instead of handing back raw numbers under an UNVERIFIED label. The
+        /// 2026-08-06 rotor read gives radius of gyration sqrt(I/m) = 1973: that is 19.73 m
+        /// if the underlying length unit is the centimetre and 1973 m if it is the metre.
+        /// The blade spans 1.5 to 60 m with its centre of mass at 15.98 m, so only the
+        /// centimetre reading can be true -- the other puts the rotor's inertia 33
+        /// blade-lengths out.
+        ///
+        /// This assumes the numbers came from FusionScripts.MassProperties. The MCP route
+        /// calls Autodesk's own tool, whose unit is NOT established; if that route is ever
+        /// used for inertia, verify it the same way rather than inheriting this.
         /// </summary>
         public double[] Inertia { get; init; } = Array.Empty<double>();
 
         /// <summary>
         /// How many bodies the component holds, when the add-in says.
         ///
-        /// LOAD-BEARING FOR THE ZERO-MASS CHECK. An assembly component that holds only
-        /// sub-components has no bodies and therefore no mass of its own -- that is correct,
-        /// not a fault. A component WITH bodies reporting zero mass is the Inactive
-        /// (Read-Only) failure. Without this the two are the same number and refusing both
-        /// would reject healthy models.
+        /// LOAD-BEARING FOR THE ZERO-MASS CHECK, though not for the reason first written
+        /// here. The original claim -- "a component holding only sub-components has no bodies
+        /// and therefore no mass of its own" -- IS FALSE, and the 2026-08-06 rotor read
+        /// disproves it: the root reported bodyCount 0 AND 3,275,458.72 kg, which is exactly
+        /// the three blades' mass. Fusion aggregates children into the parent.
+        ///
+        /// What the count actually separates is this. Bodies present with zero mass is the
+        /// Inactive (Read-Only) failure, where physicalProperties returns 0 without raising.
+        /// No bodies AND zero mass means nothing anywhere beneath the component has mass
+        /// either -- a genuinely empty component, which is legitimate. Same number, different
+        /// events; without the count, refusing one refuses both.
         ///
         /// Null when the add-in did not report it, which is treated as "assume it has
         /// bodies" -- the cautious direction, since the alternative is letting a real zero
@@ -76,6 +89,19 @@ namespace DWM.Shared.Tooling.Cad
     public sealed class FusionStageResult
     {
         public ToolRun Run { get; init; } = null!;
+
+        /// <summary>
+        /// Every component Fusion reported, FLAT AND OVERLAPPING.
+        ///
+        /// DO NOT SUM THIS LIST. It comes from design.allComponents, which contains the
+        /// assembly root as well as its children, and the root's mass already includes the
+        /// children's -- so the obvious total is roughly double the real one. The 2026-08-06
+        /// rotor sums to 4.37 million kg against a true 3.27 million.
+        ///
+        /// A warning naming the aggregating component is attached to the run when one is
+        /// detected. Taking the root alone, or the leaves alone, is correct; taking both is
+        /// not.
+        /// </summary>
         public IReadOnlyList<FusionMassProperties> Components { get; init; } =
             Array.Empty<FusionMassProperties>();
         public bool Succeeded => Run.ProducedUsableOutput;
@@ -176,6 +202,16 @@ namespace DWM.Shared.Tooling.Cad
                         "referenced. A single file with many internal components counts as one " +
                         "of the ten.");
 
+                // DOUBLE COUNTING. Not a failure -- the numbers are right, it is the obvious
+                // way of reading them that is wrong, so this warns rather than refuses.
+                var aggregate = FindAggregateRoot(components);
+                if (aggregate is not null)
+                    warnings.Add(
+                        $"'{aggregate.ComponentName}' weighs {aggregate.MassKg:G6} kg, which is " +
+                        "every other component combined: Fusion's list is FLAT and the assembly " +
+                        "root's mass ALREADY INCLUDES its children. Summing this list " +
+                        "double-counts. Take the root, or take the leaves, never both.");
+
                 return new FusionStageResult
                 {
                     Run = ToolRun.Complete(
@@ -197,6 +233,39 @@ namespace DWM.Shared.Tooling.Cad
             {
                 session?.Dispose();
             }
+        }
+
+        /// <summary>
+        /// The component whose mass already contains the rest, when there is one.
+        ///
+        /// MEASURED, NOT ASSUMED. The 2026-08-06 rotor read came back as a root of
+        /// 3,275,458.7247 kg holding three blades of 1,091,819.5749 kg each -- the root's own
+        /// bodyCount was 0, and its mass equalled the children's sum to every digit printed.
+        /// So the test is arithmetic: a component that equals everything else added together
+        /// is the parent of everything else. The tolerance is loose (0.1%) because a real
+        /// assembly can hold a small body of its own on top of its children.
+        ///
+        /// The tie-break matters. With a root and one child the identity holds for BOTH of
+        /// them, and naming the child would send the caller to drop the wrong one; the
+        /// bodiless candidate is the parent.
+        /// </summary>
+        public static FusionMassProperties? FindAggregateRoot(
+            IReadOnlyList<FusionMassProperties> components)
+        {
+            if (components.Count < 2)
+                return null;
+
+            var total = components.Sum(c => c.MassKg);
+
+            var matches = components
+                .Where(c =>
+                {
+                    var others = total - c.MassKg;
+                    return others > 0 && Math.Abs(c.MassKg - others) <= 1e-3 * others;
+                })
+                .ToList();
+
+            return matches.FirstOrDefault(c => c.BodyCount == 0) ?? matches.FirstOrDefault();
         }
 
         /// <summary>
