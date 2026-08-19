@@ -492,15 +492,20 @@ namespace DWM.Shared
             InsertParam(conn, tx, rotorBlockId, "ratedPower",     3.0e6,  "W");     // wtTurbine3MW
             InsertParam(conn, tx, rotorBlockId, "gearboxRatio", 104.3,    "-");     // BOM 2300
 
-            // !!! PLACEHOLDER ASSET PATH -- MUST BE REPLACED BEFORE THIS RENDERS ANYTHING !!!
-            // The Mountain turbine mesh was placed on Day 21; its real content path is not
-            // recorded in any document this exporter can see. A wrong path here binds nothing
-            // and the rotor simply will not appear, with no error -- so treat a turbine that
-            // does not show up as this line first, before suspecting the data.
+            // RESOLVED 2026-08-18 -- was REPLACE_ME/WindTurbineRotor. The rotor is its own mesh
+            // in the Wind_Turbine pack, separate from SM_Pillar/SM_Nacelle/SM_Base, which is what
+            // makes driving it possible at all: one combined mesh would have spun the tower too.
+            //
+            // TWO THINGS THAT CAN STILL SILENTLY BREAK THIS, both worth checking before the data:
+            //   1. A wrong path binds nothing and the rotor simply does not appear, with NO error
+            //      -- ApplyMesh logs a warning and carries on. Suspect this line first.
+            //   2. /Content/Wind_Turbine/ is GITIGNORED as a Marketplace pack (.gitignore:76), so
+            //      this path resolves on a workstation that installed the pack and resolves to
+            //      nothing in a fresh clone. That is a fresh-clone-gate concern, not a bug here.
             Exec(conn, tx,
                 "INSERT INTO AssetBindings (BlockId, AssetPath, AssetType, Role) VALUES ($id,$p,$at,$r);",
                 ("$id", rotorBlockId),
-                ("$p", "REPLACE_ME/WindTurbineRotor"),
+                ("$p", "/Game/Wind_Turbine/Meshes/SM_Rotor.SM_Rotor"),
                 ("$at", "StaticMesh"), ("$r", "Visual"));
 
             foreach (var s in samples)
@@ -524,13 +529,41 @@ namespace DWM.Shared
             // path the rest are found by substitution. A caller who passes a path
             // without "_rotor" gets rotor-only behaviour, which is what every
             // existing caller and test does.
+            // RESOLVED 2026-08-18, same session as the rotor path. Two of these are
+            // real asset paths now; the third (pitch) is deliberately left with NO
+            // binding at all -- read on before assuming that is unfinished.
+            //
+            // block_pitch: NO ASSET EXISTS FOR THIS, not a placeholder gap. The
+            // Wind_Turbine pack's blades are baked into SM_Rotor as one rigid mesh --
+            // there is no separate per-blade mesh that individually feathers, so there
+            // is nothing to bind. Passing null (not a REPLACE_ME string) makes
+            // SpawnWorldActors take its normal "no binding -- skipping" path instead
+            // of spawning an actor that would sit there invisible forever. The real
+            // beta(t) data is still written to SimSamples below -- it exists in the
+            // package for whoever eventually rigs a feathering blade mesh, it is just
+            // not driving anything visual today.
             var extraTotal = SeedTurbineChannel(conn, tx, simResultsCsv, "pitch",
-                "block_pitch", "BladePitch",  "RigidBody", "REPLACE_ME/WindTurbineBlade");
-            extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "yaw",
-                "block_yaw",   "Nacelle",     "RigidBody", "REPLACE_ME/WindTurbineNacelle");
+                "block_pitch", "BladePitch",  "RigidBody", null);
 
+            // block_yaw -> SM_Nacelle. Real mesh, real path. Still carries the caveat
+            // two comments up in this file's history and worth repeating here since this
+            // is the line that makes it observable for the first time: the data is a yaw
+            // ERROR (nacelle heading vs. wind direction), not an absolute heading, so this
+            // will visibly wobble through small corrective-looking movements rather than
+            // read as "facing the wind" -- which is a defensible visual on its own, just
+            // not the literal quantity it looks like it is.
+            extraTotal += SeedTurbineChannel(conn, tx, simResultsCsv, "yaw",
+                "block_yaw",   "Nacelle",     "RigidBody", "/Game/Wind_Turbine/Meshes/SM_Nacelle.SM_Nacelle");
+
+            // block_tower -> SM_Pillar. Real mesh, real path -- but see DwmGameInstance.cpp's
+            // SpawnWorldActors for why this block is spawned with NO SimSamples despite the
+            // data existing right here: x_t is a deflection in METERS, and ADwmPendulumActor
+            // only knows how to turn a Position value into a ROTATION. Binding the mesh gets
+            // the pillar standing in the right place; driving it with this channel today would
+            // spin the tower by "0.3 degrees" for every 0.3 METERS of sway, which is not a
+            // rounding error, it is a different physical quantity being fed into the wrong slot.
             var towerSamples = SeedTurbineChannel(conn, tx, simResultsCsv, "tower",
-                "block_tower", "Tower",       "RigidBody", "REPLACE_ME/WindTurbineTower");
+                "block_tower", "Tower",       "RigidBody", "/Game/Wind_Turbine/Meshes/SM_Pillar.SM_Pillar");
             extraTotal += towerSamples;
 
             // ----------------------------------------------------------------
