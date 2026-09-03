@@ -77,7 +77,9 @@ namespace DWM.Shared.Tooling
             new PipelineStageDefinition { Id = "cad",     Label = "CAD",     ToolId = ToolRegistry.Fusion },
             new PipelineStageDefinition { Id = "matlab",  Label = "MATLAB",  ToolId = ToolRegistry.Matlab },
             new PipelineStageDefinition { Id = "cosim",   Label = "Co-Sim",  ToolId = null },
-            new PipelineStageDefinition { Id = "runtime", Label = "Runtime", ToolId = ToolRegistry.Unreal }
+            // "UE Simulation", not "Runtime": this stage now launches the build and watches it
+            // run, so the label names the thing you do rather than the box it lands in.
+            new PipelineStageDefinition { Id = "runtime", Label = "UE Simulation", ToolId = ToolRegistry.Unreal }
         });
 
         /// <summary>
