@@ -168,9 +168,9 @@ namespace DWM.Shared.Tooling
                 },
                 ArtifactExtensions = new[] { ".uproject" },
                 KnownLimitation =
-                    "NO AUTOMATION IS WIRED. Classified as a batch tool because -run= " +
-                    "commandlets are the only route that needs nothing added; live control " +
-                    "would need the editor's Python Remote Execution plugin enabled."
+                    "Launch only. The Studio starts the packaged build and records that it " +
+                    "ran; it cannot drive what happens inside, or read anything back. Live " +
+                    "control would need the editor's Python Remote Execution plugin enabled."
             },
             new()
             {
